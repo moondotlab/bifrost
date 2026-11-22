@@ -1,14 +1,14 @@
+import type { TFunction } from "i18next";
 import PageTitle from "@/components/pageTitle";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ModelMultiselect } from "@/components/ui/modelMultiselect";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { ModelSelector } from "@/components/ui/modelSelector";
+import { ProviderSelector } from "@/components/ui/providerSelector";
 import { Switch } from "@/components/ui/switch";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ProviderIconType, RenderProviderIcon } from "@/lib/constants/icons";
-import { EmbeddingSupportedProviders, getProviderLabel } from "@/lib/constants/logs";
-import { useT, type MessageKey } from "@/lib/i18n";
+import { EmbeddingSupportedProviders } from "@/lib/constants/logs";
 import {
 	getErrorMessage,
 	useCreatePluginMutation,
@@ -20,8 +20,10 @@ import {
 import { CacheConfig, EditorCacheConfig, ModelProvider, ModelProviderName } from "@/lib/types/config";
 import { SEMANTIC_CACHE_PLUGIN } from "@/lib/types/plugins";
 import { cn } from "@/lib/utils";
+import { RbacOperation, RbacResource, useRbac } from "@enterprise/lib/contexts/rbacContext";
 import { Loader2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { Trans, useTranslation } from "react-i18next";
 import { toast } from "sonner";
 
 // The local cache plugin runs in one of two modes. Direct-only is purely
@@ -48,6 +50,7 @@ const defaultDirectConfig: EditorCacheConfig = {
 	exclude_system_prompt: false,
 	cache_by_model: true,
 	cache_by_provider: true,
+	disable_identity_scoping: false,
 };
 
 // Configs we treat as "the user has nothing saved": both API responses
@@ -73,8 +76,9 @@ const inferMode = (config: EditorCacheConfig): CacheMode => {
 	return "direct";
 };
 
-// Strip semantic-only fields when persisting a direct-only payload so the
-// server validator doesn't reject a stale provider choice.
+// Clear semantic-only fields when persisting a direct-only payload so the
+// server validator doesn't reject a stale provider choice. An update merges
+// over the saved config, so they are sent empty rather than left out.
 const buildPayload = (config: EditorCacheConfig, mode: CacheMode): CacheConfig => {
 	const base = {
 		ttl: config.ttl ?? 0,
@@ -83,11 +87,14 @@ const buildPayload = (config: EditorCacheConfig, mode: CacheMode): CacheConfig =
 		exclude_system_prompt: config.exclude_system_prompt,
 		cache_by_model: config.cache_by_model,
 		cache_by_provider: config.cache_by_provider,
-		vector_store_namespace: config.vector_store_namespace?.trim() || undefined,
-		default_cache_key: config.default_cache_key?.trim() || undefined,
+		disable_identity_scoping: config.disable_identity_scoping ?? false,
+		// Sent as "" (not undefined) when blank so the server-side merge clears
+		// a previously saved value instead of keeping it.
+		vector_store_namespace: config.vector_store_namespace?.trim() ?? "",
+		default_cache_key: config.default_cache_key?.trim() ?? "",
 	};
 	if (mode === "direct") {
-		return { ...base, dimension: 1 } as CacheConfig;
+		return { ...base, provider: "", embedding_model: "", dimension: 1 } as CacheConfig;
 	}
 	return {
 		...base,
@@ -97,29 +104,29 @@ const buildPayload = (config: EditorCacheConfig, mode: CacheMode): CacheConfig =
 	} as CacheConfig;
 };
 
-const validateForSave = (config: EditorCacheConfig, mode: CacheMode): MessageKey | null => {
+const validateForSave = (config: EditorCacheConfig, mode: CacheMode, t: TFunction<"config">): string | null => {
 	if (mode === "semantic") {
-		if (!config.provider) return "configForms.caching.errPickProvider";
-		if (!config.embedding_model?.trim()) return "configForms.caching.errPickModel";
+		if (!config.provider) return t("caching.validation.provider");
+		if (!config.embedding_model?.trim()) return t("caching.validation.model");
 		if (!config.dimension || config.dimension <= 1) {
-			return "configForms.caching.errDimension";
+			return t("caching.validation.dimension");
 		}
 	}
-	if (config.ttl !== undefined && config.ttl < 0) return "configForms.caching.errTtl";
+	if (config.ttl !== undefined && config.ttl < 0) return t("caching.validation.ttl");
 	if (config.threshold !== undefined && (config.threshold < 0 || config.threshold > 1)) {
-		return "configForms.caching.errThreshold";
+		return t("caching.validation.threshold");
 	}
 	if (
 		config.conversation_history_threshold !== undefined &&
 		(config.conversation_history_threshold < 1 || config.conversation_history_threshold > 50)
 	) {
-		return "configForms.caching.errHistory";
+		return t("caching.validation.conversationThreshold");
 	}
 	return null;
 };
 
 export default function CachingView() {
-	const t = useT();
+	const { t } = useTranslation("config");
 	const { data: bifrostConfig, isLoading: configLoading, error: configError } = useGetCoreConfigQuery({ fromDB: true });
 	const isVectorStoreEnabled = bifrostConfig?.is_cache_connected ?? false;
 
@@ -135,6 +142,7 @@ export default function CachingView() {
 	const embeddingProviders = useMemo(() => providers.filter(supportsEmbedding), [providers]);
 
 	const [updatePlugin, { isLoading: isUpdating }] = useUpdatePluginMutation();
+	const hasSettingsUpdateAccess = useRbac(RbacResource.Settings, RbacOperation.Update);
 	const [createPlugin, { isLoading: isCreating }] = useCreatePluginMutation();
 	const isSaving = isUpdating || isCreating;
 
@@ -156,12 +164,12 @@ export default function CachingView() {
 
 	useEffect(() => {
 		if (providersError) {
-			toast.error(t("configForms.caching.loadProvidersFailed", { error: getErrorMessage(providersError as any) }));
+			toast.error(t("caching.providersLoadFailed", { error: getErrorMessage(providersError) }));
 		}
 	}, [providersError, t]);
 
 	// Surface validation problems inline rather than only on Save click.
-	const validationError = useMemo(() => validateForSave(cacheConfig, mode), [cacheConfig, mode]);
+	const validationError = useMemo(() => validateForSave(cacheConfig, mode, t), [cacheConfig, mode, t]);
 
 	// Only show the dimension/namespace heads-up when the user has actually
 	// touched a structural field. Showing it permanently in semantic mode
@@ -185,6 +193,7 @@ export default function CachingView() {
 			"exclude_system_prompt",
 			"cache_by_model",
 			"cache_by_provider",
+			"disable_identity_scoping",
 			"vector_store_namespace",
 			"default_cache_key",
 		];
@@ -214,9 +223,9 @@ export default function CachingView() {
 				// No plugin row + user toggling off ⇒ nothing to disable.
 				// Bail before the success toast so we don't lie about the state.
 				if (!checked) return;
-				const err = validateForSave(cacheConfig, mode);
+				const err = validateForSave(cacheConfig, mode, t);
 				if (err) {
-					toast.error(t(err));
+					toast.error(err);
 					return;
 				}
 				const payload = buildPayload(cacheConfig, mode);
@@ -227,20 +236,18 @@ export default function CachingView() {
 					path: "",
 				}).unwrap();
 			}
-			toast.success(checked ? t("configForms.caching.enabled") : t("configForms.caching.disabled"));
+			toast.success(checked ? t("caching.toastEnabled") : t("caching.toastDisabled"));
 		} catch (error) {
 			toast.error(
-				t(checked ? "configForms.caching.enableFailed" : "configForms.caching.disableFailed", {
-					error: getErrorMessage(error),
-				}),
+				t("caching.toastToggleFailed", { action: checked ? t("caching.enable") : t("caching.disable"), error: getErrorMessage(error) }),
 			);
 		}
 	};
 
 	const handleSave = async () => {
-		const err = validateForSave(cacheConfig, mode);
+		const err = validateForSave(cacheConfig, mode, t);
 		if (err) {
-			toast.error(t(err));
+			toast.error(err);
 			return;
 		}
 		const payload = buildPayload(cacheConfig, mode);
@@ -260,9 +267,9 @@ export default function CachingView() {
 			setCacheConfig(editor);
 			setServerCacheConfig(editor);
 			setMode(inferMode(editor));
-			toast.success(t("configForms.caching.updated"));
+			toast.success(t("caching.toastUpdated"));
 		} catch (error) {
-			toast.error(t("configForms.caching.updateFailed", { error: getErrorMessage(error) }));
+			toast.error(t("caching.toastUpdateFailed", { error: getErrorMessage(error) }));
 		}
 	};
 
@@ -271,15 +278,12 @@ export default function CachingView() {
 
 	return (
 		<div className="mx-auto w-full max-w-4xl space-y-6">
-			<PageTitle title="Local Cache">
-				{t("configForms.caching.pageDescription")}{" "}
-				{!isVectorStoreEnabled && <span className="text-destructive font-medium">{t("configForms.caching.requiresVectorStore")}</span>}
-			</PageTitle>
+			<PageTitle title={t("caching.title")}>{t("caching.description")}</PageTitle>
 
 			{configError !== undefined && (
 				<div className="border-destructive/50 bg-destructive/10 rounded-sm border p-4">
-					<p className="text-destructive text-sm font-medium">{t("configForms.caching.loadConfigFailed")}</p>
-					<p className="text-muted-foreground mt-1 text-sm">{getErrorMessage(configError) || t("configForms.caching.unexpectedError")}</p>
+					<p className="text-destructive text-sm font-medium">{t("caching.failedToLoad")}</p>
+					<p className="text-muted-foreground mt-1 text-sm">{getErrorMessage(configError) || t("caching.unexpectedError")}</p>
 				</div>
 			)}
 
@@ -297,18 +301,25 @@ export default function CachingView() {
 					<div className="flex items-center justify-between space-x-2">
 						<div className="space-y-0.5">
 							<label htmlFor="enable-caching" className="text-sm font-medium">
-								{t("configForms.caching.enableCache")}
+								{t("caching.enableCaching")}
 							</label>
-							<p className="text-muted-foreground text-sm">{t("configForms.caching.enableCacheDescription")}</p>
+							<p className="text-muted-foreground text-sm">{t("caching.enableHelp")}</p>
 						</div>
-						<Switch
-							id="enable-caching"
-							data-testid="caching-enable-switch"
-							size="md"
-							checked={cachingActive}
-							disabled={!isVectorStoreEnabled || isSaving}
-							onCheckedChange={handleToggle}
-						/>
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<span tabIndex={!hasSettingsUpdateAccess ? 0 : undefined}>
+									<Switch
+										id="enable-caching"
+										data-testid="caching-enable-switch"
+										size="md"
+										checked={cachingActive}
+										disabled={!isVectorStoreEnabled || isSaving || !hasSettingsUpdateAccess}
+										onCheckedChange={handleToggle}
+									/>
+								</span>
+							</TooltipTrigger>
+							{!hasSettingsUpdateAccess && <TooltipContent>{t("proxy.noPermission")}</TooltipContent>}
+						</Tooltip>
 					</div>
 
 					{providersLoading ? (
@@ -320,30 +331,30 @@ export default function CachingView() {
 							<div className={cn("space-y-4", !cachingActive && "pointer-events-none opacity-50")} aria-disabled={!cachingActive}>
 								{/* Mode picker. Direct-only is first-class. */}
 								<div className="space-y-2">
-									<Label className="text-sm font-medium">{t("configForms.caching.cacheMode")}</Label>
+									<Label className="text-sm font-medium">{t("caching.cacheMode")}</Label>
 									<Tabs value={mode} onValueChange={(v) => setMode(v as CacheMode)}>
 										<TabsList className="flex w-full justify-start">
-											<TabsTrigger value="direct" data-testid="caching-mode-direct-tab">
-												{t("configForms.caching.directOnly")}
+											{/* Panels live outside <Tabs>, so drop the dangling aria-controls Radix would add. */}
+											<TabsTrigger value="direct" data-testid="caching-mode-direct-tab" aria-controls={undefined}>
+												{t("caching.directOnly")}
 											</TabsTrigger>
 											<TabsTrigger
 												value="semantic"
 												data-testid="caching-mode-semantic-tab"
+												aria-controls={undefined}
 												disabled={embeddingProviders.length === 0}
-												title={embeddingProviders.length === 0 ? t("configForms.caching.semanticNeedsProvider") : undefined}
+												title={embeddingProviders.length === 0 ? t("caching.semanticProviderRequired") : undefined}
 											>
-												{t("configForms.caching.directSemantic")}
+												{t("caching.directSemantic")}
 											</TabsTrigger>
 										</TabsList>
 									</Tabs>
-									<p className="text-muted-foreground text-xs">
-										{mode === "direct" ? t("configForms.caching.directModeHint") : t("configForms.caching.semanticModeHint")}
-									</p>
+									<p className="text-muted-foreground text-xs">{mode === "direct" ? t("caching.directHelp") : t("caching.semanticHelp")}</p>
 								</div>
 
 								{validationError && (
 									<div className="border-destructive/40 bg-destructive/10 text-destructive rounded-sm border p-3 text-xs">
-										{t(validationError)}
+										{validationError}
 									</div>
 								)}
 
@@ -352,62 +363,49 @@ export default function CachingView() {
 									<>
 										{hasStructuralChange && (
 											<div className="rounded-sm border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
-												{t("configForms.caching.headsUp")}
+												<Trans
+													t={t}
+													i18nKey="caching.structuralChangeHelp"
+													components={{ b0: <b />, em1: <em />, b2: <b />, b3: <b />, b4: <b />, b5: <b />, em6: <em /> }}
+												/>
 											</div>
 										)}
 
 										<div className="space-y-4">
-											<h3 className="text-sm font-medium">{t("configForms.caching.embeddingProviderModel")}</h3>
+											<h3 className="text-sm font-medium">{t("caching.embeddingProviderModel")}</h3>
 											<div className="grid grid-cols-1 gap-4 md:grid-cols-2">
 												<div className="space-y-2">
-													<Label htmlFor="provider">{t("configForms.caching.configuredProviders")}</Label>
-													<Select
-														value={cacheConfig.provider}
-														onValueChange={(value: ModelProviderName) =>
+													<Label htmlFor="provider">{t("caching.configuredProviders")}</Label>
+													<ProviderSelector
+														inputId="provider"
+														data-testid="caching-provider-select"
+														filter={supportsEmbedding}
+														value={cacheConfig.provider ?? ""}
+														onChange={(value: string) =>
 															updateLocal({
-																provider: value,
+																provider: value as ModelProviderName,
 																embedding_model: value === cacheConfig.provider ? cacheConfig.embedding_model : "",
 															})
 														}
-													>
-														<SelectTrigger className="w-full" data-testid="caching-provider-select">
-															<SelectValue placeholder={t("configForms.caching.selectProvider")} />
-														</SelectTrigger>
-														<SelectContent>
-															{embeddingProviders
-																.filter((provider) => provider.name)
-																.map((provider) => (
-																	<SelectItem key={provider.name} value={provider.name}>
-																		<div className="flex items-center gap-2">
-																			<RenderProviderIcon provider={provider.name as ProviderIconType} size="sm" className="h-4 w-4" />
-																			<span>{getProviderLabel(provider.name)}</span>
-																		</div>
-																	</SelectItem>
-																))}
-														</SelectContent>
-													</Select>
+													/>
 												</div>
 												<div className="space-y-2">
-													<Label htmlFor="embedding_model">{t("configForms.caching.embeddingModel")}</Label>
-													<ModelMultiselect
+													<Label htmlFor="embedding_model">{t("caching.embeddingModelRequired")}</Label>
+													<ModelSelector
 														inputId="embedding_model"
 														data-testid="caching-embedding-model-select"
-														isSingleSelect
 														provider={cacheConfig.provider || undefined}
 														value={cacheConfig.embedding_model ?? ""}
 														onChange={(model) => updateLocal({ embedding_model: model })}
-														placeholder={
-															cacheConfig.provider
-																? t("configForms.caching.searchEmbeddingModel")
-																: t("configForms.caching.selectProviderFirst")
-														}
+														allowCustomModel
+														placeholder={cacheConfig.provider ? t("caching.searchEmbeddingModel") : t("caching.selectProviderFirst")}
 														disabled={!cacheConfig.provider}
 													/>
 												</div>
 											</div>
-											<p className="text-muted-foreground text-xs">{t("configForms.caching.embeddingKeysHint")}</p>
+											<p className="text-muted-foreground text-xs">{t("caching.inheritedKeysHelp")}</p>
 											<div className="space-y-2">
-												<Label htmlFor="dimension">{t("configForms.caching.dimension")}</Label>
+												<Label htmlFor="dimension">{t("caching.dimension")}</Label>
 												<Input
 													id="dimension"
 													data-testid="caching-dimension-input"
@@ -426,7 +424,13 @@ export default function CachingView() {
 														}
 													}}
 												/>
-												<p className="text-muted-foreground text-xs">{t("configForms.caching.dimensionHint")}</p>
+												<p className="text-muted-foreground text-xs">
+													<Trans
+														t={t}
+														i18nKey="caching.dimensionHelp"
+														components={{ code0: <code />, code1: <code />, code2: <code />, code3: <code />, code4: <code /> }}
+													/>
+												</p>
 											</div>
 										</div>
 									</>
@@ -434,10 +438,10 @@ export default function CachingView() {
 
 								{/* Cache settings shared across modes. */}
 								<div className="space-y-4">
-									<h3 className="text-sm font-medium">{t("configForms.caching.cacheSettings")}</h3>
+									<h3 className="text-sm font-medium">{t("caching.cacheSettings")}</h3>
 									<div className={cn("grid gap-4", mode === "semantic" ? "grid-cols-1 md:grid-cols-2" : "grid-cols-1")}>
 										<div className="space-y-2">
-											<Label htmlFor="ttl">{t("configForms.caching.ttlSeconds")}</Label>
+											<Label htmlFor="ttl">{t("caching.ttl")}</Label>
 											<Input
 												id="ttl"
 												data-testid="caching-ttl-input"
@@ -456,11 +460,13 @@ export default function CachingView() {
 													}
 												}}
 											/>
-											<p className="text-muted-foreground text-xs">{t("configForms.caching.ttlHint")}</p>
+											<p className="text-muted-foreground text-xs">
+												<Trans t={t} i18nKey="caching.ttlHelp" components={{ b0: <b /> }} />
+											</p>
 										</div>
 										{mode === "semantic" && (
 											<div className="space-y-2">
-												<Label htmlFor="threshold">{t("configForms.caching.similarityThreshold")}</Label>
+												<Label htmlFor="threshold">{t("caching.similarityThreshold")}</Label>
 												<Input
 													id="threshold"
 													data-testid="caching-threshold-input"
@@ -481,7 +487,9 @@ export default function CachingView() {
 														}
 													}}
 												/>
-												<p className="text-muted-foreground text-xs">{t("configForms.caching.thresholdHint")}</p>
+												<p className="text-muted-foreground text-xs">
+													<Trans t={t} i18nKey="caching.thresholdHelp" components={{ b0: <b /> }} />
+												</p>
 											</div>
 										)}
 									</div>
@@ -489,41 +497,45 @@ export default function CachingView() {
 
 								{/* Storage & Cache Key. */}
 								<div className="space-y-4">
-									<h3 className="text-sm font-medium">{t("configForms.caching.storageAndKey")}</h3>
+									<h3 className="text-sm font-medium">{t("caching.storageCacheKey")}</h3>
 									<div className="grid grid-cols-1 gap-4 md:grid-cols-2">
 										<div className="space-y-2">
-											<Label htmlFor="vector_store_namespace">{t("configForms.caching.vectorStoreNamespace")}</Label>
+											<Label htmlFor="vector_store_namespace">{t("caching.vectorStoreNamespace")}</Label>
 											<Input
 												id="vector_store_namespace"
 												data-testid="caching-vector-store-namespace-input"
 												type="text"
-												placeholder="BifrostLocalCachePlugin"
+												placeholder="BifrostSemanticCachePlugin" // i18n-ignore: plugin identifier
 												value={cacheConfig.vector_store_namespace ?? ""}
 												onChange={(e) => updateLocal({ vector_store_namespace: e.target.value })}
 											/>
-											<p className="text-muted-foreground text-xs">{t("configForms.caching.namespaceHint")}</p>
+											<p className="text-muted-foreground text-xs">
+												<Trans t={t} i18nKey="caching.namespaceHelp" components={{ code0: <code /> }} />
+											</p>
 										</div>
 										<div className="space-y-2">
-											<Label htmlFor="default_cache_key">{t("configForms.caching.defaultCacheKey")}</Label>
+											<Label htmlFor="default_cache_key">{t("caching.defaultCacheKey")}</Label>
 											<Input
 												id="default_cache_key"
 												data-testid="caching-default-cache-key-input"
 												type="text"
-												placeholder={t("configForms.caching.defaultCacheKeyPlaceholder")}
+												placeholder={t("caching.noDefaultCacheKey")}
 												value={cacheConfig.default_cache_key ?? ""}
 												onChange={(e) => updateLocal({ default_cache_key: e.target.value })}
 											/>
-											<p className="text-muted-foreground text-xs">{t("configForms.caching.defaultCacheKeyHint")}</p>
+											<p className="text-muted-foreground text-xs">
+												<Trans t={t} i18nKey="caching.defaultKeyHelp" components={{ b0: <b />, b1: <b /> }} />
+											</p>
 										</div>
 									</div>
 								</div>
 
 								{/* Conversation Settings. */}
 								<div className="space-y-4">
-									<h3 className="text-sm font-medium">{t("configForms.caching.conversationSettings")}</h3>
+									<h3 className="text-sm font-medium">{t("caching.conversationSettings")}</h3>
 									<div className="grid grid-cols-1 gap-4 md:grid-cols-2">
 										<div className="space-y-2">
-											<Label htmlFor="conversation_history_threshold">{t("configForms.caching.historyThreshold")}</Label>
+											<Label htmlFor="conversation_history_threshold">{t("caching.conversationHistoryThreshold")}</Label>
 											<Input
 												id="conversation_history_threshold"
 												data-testid="caching-conversation-history-threshold-input"
@@ -548,16 +560,17 @@ export default function CachingView() {
 													}
 												}}
 											/>
-											<p className="text-muted-foreground text-xs">{t("configForms.caching.historyThresholdHint")}</p>
+											<p className="text-muted-foreground text-xs">{t("caching.conversationThresholdHelp")}</p>
 										</div>
 									</div>
 									<div className="space-y-2">
 										<div className="flex h-fit items-center justify-between space-x-2 rounded-sm border p-3">
 											<div className="space-y-0.5">
-												<Label className="text-sm font-medium">{t("configForms.caching.excludeSystemPrompt")}</Label>
-												<p className="text-muted-foreground text-xs">{t("configForms.caching.excludeSystemPromptHint")}</p>
+												<Label className="text-sm font-medium">{t("caching.excludeSystemPrompt")}</Label>
+												<p className="text-muted-foreground text-xs">{t("caching.excludeSystemPromptHelp")}</p>
 											</div>
 											<Switch
+												aria-label={t("caching.aria.excludeSystemPrompt")}
 												data-testid="caching-exclude-system-prompt-switch"
 												checked={cacheConfig.exclude_system_prompt || false}
 												onCheckedChange={(checked) => updateLocal({ exclude_system_prompt: checked })}
@@ -569,14 +582,15 @@ export default function CachingView() {
 
 								{/* Cache Behavior applies to both modes. */}
 								<div className="space-y-4">
-									<h3 className="text-sm font-medium">{t("configForms.caching.cacheKeyComposition")}</h3>
+									<h3 className="text-sm font-medium">{t("caching.cacheKeyComposition")}</h3>
 									<div className="space-y-3">
 										<div className="flex items-center justify-between space-x-2 rounded-sm border p-3">
 											<div className="space-y-0.5">
-												<Label className="text-sm font-medium">{t("configForms.caching.cacheByModel")}</Label>
-												<p className="text-muted-foreground text-xs">{t("configForms.caching.cacheByModelHint")}</p>
+												<Label className="text-sm font-medium">{t("caching.cacheByModel")}</Label>
+												<p className="text-muted-foreground text-xs">{t("caching.cacheByModelHelp")}</p>
 											</div>
 											<Switch
+												aria-label={t("caching.aria.cacheByModel")}
 												data-testid="caching-cache-by-model-switch"
 												checked={cacheConfig.cache_by_model}
 												onCheckedChange={(checked) => updateLocal({ cache_by_model: checked })}
@@ -585,13 +599,27 @@ export default function CachingView() {
 										</div>
 										<div className="flex items-center justify-between space-x-2 rounded-sm border p-3">
 											<div className="space-y-0.5">
-												<Label className="text-sm font-medium">{t("configForms.caching.cacheByProvider")}</Label>
-												<p className="text-muted-foreground text-xs">{t("configForms.caching.cacheByProviderHint")}</p>
+												<Label className="text-sm font-medium">{t("caching.cacheByProvider")}</Label>
+												<p className="text-muted-foreground text-xs">{t("caching.cacheByProviderHelp")}</p>
 											</div>
 											<Switch
+												aria-label={t("caching.aria.cacheByProvider")}
 												data-testid="caching-cache-by-provider-switch"
 												checked={cacheConfig.cache_by_provider}
 												onCheckedChange={(checked) => updateLocal({ cache_by_provider: checked })}
+												size="md"
+											/>
+										</div>
+										<div className="flex items-center justify-between space-x-2 rounded-sm border p-3">
+											<div className="space-y-0.5">
+												<Label className="text-sm font-medium">{t("caching.scopeByIdentity")}</Label>
+												<p className="text-muted-foreground text-xs">{t("caching.scopeByIdentityHelp")}</p>
+											</div>
+											<Switch
+												aria-label={t("caching.aria.scopeByIdentity")}
+												data-testid="caching-identity-scoping-switch"
+												checked={!cacheConfig.disable_identity_scoping}
+												onCheckedChange={(checked) => updateLocal({ disable_identity_scoping: !checked })}
 												size="md"
 											/>
 										</div>
@@ -599,25 +627,42 @@ export default function CachingView() {
 								</div>
 
 								<div className="space-y-2">
-									<Label className="text-sm font-medium">{t("configForms.caching.perRequestOverrides")}</Label>
+									<Label className="text-sm font-medium">{t("caching.perRequestOverrides")}</Label>
 									<ul className="text-muted-foreground list-inside list-disc text-xs">
-										<li>{t("configForms.caching.overrideCacheKey")}</li>
-										<li>{t("configForms.caching.overrideTtl")}</li>
-										<li>{t("configForms.caching.overrideThreshold")}</li>
-										<li>{t("configForms.caching.overrideType")}</li>
-										<li>{t("configForms.caching.overrideNoStore")}</li>
+										<li>
+											<Trans t={t} i18nKey="caching.overrides.key" components={{ b0: <b /> }} />
+										</li>
+										<li>
+											<Trans t={t} i18nKey="caching.overrides.ttl" components={{ b0: <b /> }} />
+										</li>
+										<li>
+											<Trans t={t} i18nKey="caching.overrides.threshold" components={{ b0: <b /> }} />
+										</li>
+										<li>
+											<Trans t={t} i18nKey="caching.overrides.type" components={{ b0: <b />, code1: <code />, code2: <code /> }} />
+										</li>
+										<li>
+											<Trans t={t} i18nKey="caching.overrides.noStore" components={{ b0: <b />, code1: <code /> }} />
+										</li>
 									</ul>
 								</div>
 							</div>
 
-							<div className="flex justify-end pt-2">
-								<Button
-									data-testid="caching-save-button"
-									onClick={handleSave}
-									disabled={!hasUnsavedConfigChanges || isSaving || Boolean(validationError)}
-								>
-									{isSaving ? t("common.saving") : t("common.saveChanges")}
-								</Button>
+							<div className="bg-card sticky bottom-0 flex justify-end py-2">
+								<Tooltip>
+									<TooltipTrigger asChild>
+										<span tabIndex={!hasSettingsUpdateAccess ? 0 : undefined}>
+											<Button
+												data-testid="caching-save-button"
+												onClick={handleSave}
+												disabled={!hasUnsavedConfigChanges || isSaving || Boolean(validationError) || !hasSettingsUpdateAccess}
+											>
+												{isSaving ? t("saving") : t("saveChanges")}
+											</Button>
+										</span>
+									</TooltipTrigger>
+									{!hasSettingsUpdateAccess && <TooltipContent>{t("proxy.noPermission")}</TooltipContent>}
+								</Tooltip>
 							</div>
 						</>
 					)}

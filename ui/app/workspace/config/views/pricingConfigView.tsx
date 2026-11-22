@@ -2,11 +2,11 @@ import PageTitle from "@/components/pageTitle";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useT } from "@/lib/i18n";
 import { getErrorMessage, useForcePricingSyncMutation, useGetCoreConfigQuery, useUpdateCoreConfigMutation } from "@/lib/store";
 import { RbacOperation, RbacResource, useRbac } from "@enterprise/lib";
 import { useEffect, useMemo } from "react";
 import { useForm } from "react-hook-form";
+import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 
 interface PricingFormData {
@@ -16,7 +16,7 @@ interface PricingFormData {
 }
 
 export default function PricingConfigView() {
-	const t = useT();
+	const { t } = useTranslation("config");
 	const hasSettingsUpdateAccess = useRbac(RbacResource.Settings, RbacOperation.Update);
 	const { data: bifrostConfig } = useGetCoreConfigQuery({ fromDB: true });
 	const config = bifrostConfig?.framework_config;
@@ -73,7 +73,7 @@ export default function PricingConfigView() {
 					model_parameters_url: data.model_parameters_url,
 				},
 			}).unwrap();
-			toast.success(t("configForms.pricing.updated"));
+			toast.success(t("pricing.toastSaved"));
 			reset(data);
 		} catch (error) {
 			toast.error(getErrorMessage(error));
@@ -83,7 +83,7 @@ export default function PricingConfigView() {
 	const handleForceSync = async () => {
 		try {
 			await forcePricingSync().unwrap();
-			toast.success(t("configForms.modelSettings.pricingSynced"));
+			toast.success(t("pricing.toastSynced"));
 		} catch (error) {
 			toast.error(getErrorMessage(error));
 		}
@@ -92,29 +92,29 @@ export default function PricingConfigView() {
 	return (
 		<div className="mx-auto w-full max-w-7xl space-y-4" data-testid="pricing-config-view">
 			<form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-				<PageTitle title="Pricing Configuration">{t("configForms.pricing.pageDescription")}</PageTitle>
+				<PageTitle title={t("pricing.title")}>{t("pricing.description")}</PageTitle>
 
 				<div className="space-y-4">
 					{/* Pricing Datasheet URL */}
 					<div className="space-y-2 rounded-sm border p-4">
 						<div className="space-y-0.5">
-							<Label htmlFor="pricing-datasheet-url">{t("configForms.modelSettings.pricingDatasheetUrl")}</Label>
-							<p className="text-muted-foreground text-sm">{t("configForms.modelSettings.pricingDatasheetUrlDescription")}</p>
+							<Label htmlFor="pricing-datasheet-url">{t("pricing.datasheetUrl")}</Label>
+							<p className="text-muted-foreground text-sm">{t("pricing.datasheetUrlHelp")}</p>
 						</div>
 						<Input
 							id="pricing-datasheet-url"
 							type="text"
-							placeholder={t("configForms.modelSettings.pricingDatasheetUrlPlaceholder")}
+							placeholder="https://example.com/pricing.json"
 							data-testid="pricing-datasheet-url-input"
 							{...register("pricing_datasheet_url", {
 								pattern: {
 									value: /^(https?:\/\/)?((localhost|(\d{1,3}\.){3}\d{1,3})(:\d+)?|([\da-z\.-]+)\.([a-z\.]{2,6}))([\/\w \.-]*)*\/?$/,
-									message: t("configForms.pricing.invalidUrl"),
+									message: t("pricing.validUrl"),
 								},
 								validate: {
 									checkIfHttp: (value) => {
 										if (!value) return true; // Allow empty
-										return value.startsWith("http://") || value.startsWith("https://") || t("configForms.pricing.invalidUrlScheme");
+										return value.startsWith("http://") || value.startsWith("https://") || t("pricing.httpUrl");
 									},
 								},
 							})}
@@ -126,23 +126,23 @@ export default function PricingConfigView() {
 					{/* Model Parameters URL */}
 					<div className="space-y-2 rounded-sm border p-4">
 						<div className="space-y-0.5">
-							<Label htmlFor="model-parameters-url">{t("configForms.modelSettings.modelParametersUrl")}</Label>
-							<p className="text-muted-foreground text-sm">{t("configForms.modelSettings.modelParametersUrlDescription")}</p>
+							<Label htmlFor="model-parameters-url">{t("pricing.modelParametersUrl")}</Label>
+							<p className="text-muted-foreground text-sm">{t("pricing.modelParametersUrlHelp")}</p>
 						</div>
 						<Input
 							id="model-parameters-url"
 							type="text"
-							placeholder={t("configForms.modelSettings.modelParametersUrlPlaceholder")}
+							placeholder="https://example.com/model-parameters.json"
 							data-testid="model-parameters-url-input"
 							{...register("model_parameters_url", {
 								pattern: {
 									value: /^(https?:\/\/)?((localhost|(\d{1,3}\.){3}\d{1,3})(:\d+)?|([\da-z\.-]+)\.([a-z\.]{2,6}))([\/\w \.-]*)*\/?$/,
-									message: t("configForms.pricing.invalidUrl"),
+									message: t("pricing.validUrl"),
 								},
 								validate: {
 									checkIfHttp: (value) => {
 										if (!value) return true;
-										return value.startsWith("http://") || value.startsWith("https://") || t("configForms.pricing.invalidUrlScheme");
+										return value.startsWith("http://") || value.startsWith("https://") || t("pricing.httpUrl");
 									},
 								},
 							})}
@@ -155,22 +155,22 @@ export default function PricingConfigView() {
 					<div className="space-y-2 rounded-sm border p-4">
 						<div className="space-y-2">
 							<div className="space-y-0.5">
-								<Label htmlFor="pricing-sync-interval">{t("configForms.modelSettings.pricingSyncInterval")}</Label>
-								<p className="text-muted-foreground text-sm">{t("configForms.modelSettings.pricingSyncIntervalDescription")}</p>
+								<Label htmlFor="pricing-sync-interval">{t("pricing.syncInterval")}</Label>
+								<p className="text-muted-foreground text-sm">{t("pricing.syncIntervalHelp")}</p>
 							</div>
 							<Input
 								id="pricing-sync-interval"
 								type="number"
 								className={errors.pricing_sync_interval_hours ? "border-destructive" : ""}
 								{...register("pricing_sync_interval_hours", {
-									required: t("configForms.modelSettings.pricingSyncRequired"),
+									required: t("pricing.syncIntervalRequired"),
 									min: {
 										value: 1,
-										message: t("configForms.modelSettings.pricingSyncMin"),
+										message: t("pricing.syncIntervalMin"),
 									},
 									max: {
 										value: 8760,
-										message: t("configForms.modelSettings.pricingSyncMax"),
+										message: t("pricing.syncIntervalMax"),
 									},
 									valueAsNumber: true,
 								})}
@@ -189,10 +189,10 @@ export default function PricingConfigView() {
 						disabled={isForceSyncing || !hasSettingsUpdateAccess}
 						data-testid="pricing-force-sync-btn"
 					>
-						{isForceSyncing ? t("configForms.modelSettings.syncing") : t("configForms.modelSettings.forceSync")}
+						{isForceSyncing ? t("pricing.syncing") : t("pricing.forceSync")}
 					</Button>
 					<Button type="submit" disabled={!hasChanges || isLoading || !hasSettingsUpdateAccess} data-testid="pricing-save-btn">
-						{isLoading ? t("common.saving") : t("common.saveChanges")}
+						{isLoading ? t("saving") : t("saveChanges")}
 					</Button>
 				</div>
 			</form>

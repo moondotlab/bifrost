@@ -2,9 +2,9 @@ import { Button } from "@/components/ui/button";
 import { CodeEditor } from "@/components/ui/codeEditor";
 import { FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
-import { useT } from "@/lib/i18n";
 import { Info, PlusIcon } from "lucide-react";
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { UseFormReturn } from "react-hook-form";
 
 interface PluginFormData {
@@ -20,7 +20,7 @@ interface PluginFormFragmentProps {
 }
 
 export function PluginFormFragment({ form, isEditMode = false }: PluginFormFragmentProps) {
-	const t = useT();
+	const { t } = useTranslation("governance");
 	const [showConfig, setShowConfig] = useState(form.getValues("hasConfig") || false);
 
 	return (
@@ -28,7 +28,7 @@ export function PluginFormFragment({ form, isEditMode = false }: PluginFormFragm
 			<div className="bg-muted/50 flex items-start gap-2 rounded-md border p-3">
 				<Info className="text-muted-foreground mt-0.5 h-4 w-4 shrink-0" />
 				<p className="text-muted-foreground text-sm">
-					{isEditMode ? t("routing.plugins.formHintEdit") : t("routing.plugins.formHintCreate")}{" "}
+					{isEditMode ? t("plugins.formInfoEdit") : t("plugins.formInfoInstall")}{" "}
 					<a
 						href="https://docs.getbifrost.ai/plugins"
 						target="_blank"
@@ -36,7 +36,7 @@ export function PluginFormFragment({ form, isEditMode = false }: PluginFormFragm
 						className="text-primary hover:underline"
 						data-testid="plugins-form-docs-link"
 					>
-						{t("routing.plugins.learnMore")}
+						{t("plugins.learnMore")}
 					</a>
 				</p>
 			</div>
@@ -46,9 +46,9 @@ export function PluginFormFragment({ form, isEditMode = false }: PluginFormFragm
 				name="name"
 				render={({ field }) => (
 					<FormItem>
-						<FormLabel>{t("routing.plugins.pluginName")}</FormLabel>
+						<FormLabel>{t("plugins.nameStar")}</FormLabel>
 						<FormControl>
-							<Input placeholder={t("routing.plugins.pluginNamePlaceholder")} {...field} disabled={isEditMode} />
+							<Input placeholder={t("plugins.namePlaceholder")} {...field} disabled={isEditMode} />
 						</FormControl>
 						<FormMessage />
 					</FormItem>
@@ -60,9 +60,9 @@ export function PluginFormFragment({ form, isEditMode = false }: PluginFormFragm
 				name="path"
 				render={({ field }) => (
 					<FormItem>
-						<FormLabel>{t("routing.plugins.pluginPath")}</FormLabel>
+						<FormLabel>{t("plugins.pathStar")}</FormLabel>
 						<FormControl>
-							<Input placeholder={t("routing.plugins.pluginPathPlaceholder")} {...field} disabled={isEditMode} />
+							<Input placeholder={t("plugins.pathPlaceholder")} {...field} disabled={isEditMode} />
 						</FormControl>
 						<FormMessage />
 					</FormItem>
@@ -84,7 +84,7 @@ export function PluginFormFragment({ form, isEditMode = false }: PluginFormFragm
 					className="w-full"
 				>
 					<PlusIcon className="mr-2 h-4 w-4" />
-					{t("routing.plugins.addConfiguration")}
+					{t("plugins.addConfiguration")}
 				</Button>
 			) : (
 				<FormField
@@ -93,7 +93,7 @@ export function PluginFormFragment({ form, isEditMode = false }: PluginFormFragm
 					render={({ field }) => (
 						<FormItem>
 							<div className="flex items-center justify-between">
-								<FormLabel>{t("routing.plugins.configJson")}</FormLabel>
+								<FormLabel>{t("plugins.configJson")}</FormLabel>
 								<Button
 									type="button"
 									variant="ghost"
@@ -105,7 +105,7 @@ export function PluginFormFragment({ form, isEditMode = false }: PluginFormFragm
 									}}
 									className="h-auto p-1 text-xs"
 								>
-									{t("common.remove")}
+									{t("plugins.remove")}
 								</Button>
 							</div>
 							<FormControl>

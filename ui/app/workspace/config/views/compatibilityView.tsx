@@ -1,15 +1,15 @@
 import PageTitle from "@/components/pageTitle";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
-import { useT } from "@/lib/i18n";
 import { getErrorMessage, useGetCoreConfigQuery, useUpdateCoreConfigMutation } from "@/lib/store";
 import { CompatConfig, DefaultCoreConfig } from "@/lib/types/config";
 import { RbacOperation, RbacResource, useRbac } from "@enterprise/lib";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 
 export default function CompatibilityView() {
-	const t = useT();
+	const { t } = useTranslation("config");
 	const hasSettingsUpdateAccess = useRbac(RbacResource.Settings, RbacOperation.Update);
 	const { data: bifrostConfig } = useGetCoreConfigQuery({ fromDB: true });
 	const config = bifrostConfig?.client_config?.compat;
@@ -31,7 +31,10 @@ export default function CompatibilityView() {
 			localCompatConfig.convert_chat_to_responses !== baseline.convert_chat_to_responses ||
 			localCompatConfig.should_drop_params !== baseline.should_drop_params ||
 			localCompatConfig.should_convert_params !== baseline.should_convert_params ||
-			(localCompatConfig.azure_deepseek ?? true) !== (baseline.azure_deepseek ?? true)
+			(localCompatConfig.azure_deepseek ?? true) !== (baseline.azure_deepseek ?? true) ||
+			(localCompatConfig.force_reasoning_only_models_to_responses ?? true) !==
+				(baseline.force_reasoning_only_models_to_responses ?? true) ||
+			(localCompatConfig.convert_decision_to_responses ?? false) !== (baseline.convert_decision_to_responses ?? false)
 		);
 	}, [config, localCompatConfig]);
 
@@ -41,7 +44,7 @@ export default function CompatibilityView() {
 
 	const handleSave = useCallback(async () => {
 		if (!bifrostConfig) {
-			toast.error(t("logging.configNotLoaded"));
+			toast.error(t("configNotLoaded"));
 			return;
 		}
 
@@ -53,7 +56,7 @@ export default function CompatibilityView() {
 					compat: localCompatConfig,
 				},
 			}).unwrap();
-			toast.success(t("configForms.compatibility.updated"));
+			toast.success(t("compatibility.toastSaved"));
 		} catch (error) {
 			toast.error(getErrorMessage(error));
 		}
@@ -61,8 +64,8 @@ export default function CompatibilityView() {
 
 	return (
 		<div className="mx-auto w-full max-w-4xl space-y-6">
-			<PageTitle title="Compatibility">
-				{t("configForms.compatibility.pageDescription")}{" "}
+			<PageTitle title={t("compatibility.title")}>
+				{t("compatibility.description")}{" "}
 				<a
 					className="text-primary underline"
 					href="https://docs.getbifrost.ai/features/compat-plugin"
@@ -70,7 +73,7 @@ export default function CompatibilityView() {
 					rel="noopener noreferrer"
 					data-testid="litellm-docs-link"
 				>
-					{t("configForms.learnMore")}
+					{t("learnMore")}
 				</a>
 			</PageTitle>
 
@@ -78,9 +81,9 @@ export default function CompatibilityView() {
 				<div className="flex items-center justify-between space-x-2">
 					<div className="space-y-0.5">
 						<label htmlFor="compat-convert-text-to-chat" className="text-sm font-medium">
-							{t("configForms.compatibility.convertTextToChat")}
+							{t("compatibility.convertTextToChat")}
 						</label>
-						<p className="text-muted-foreground text-sm">{t("configForms.compatibility.convertTextToChatDescription")}</p>
+						<p className="text-muted-foreground text-sm">{t("compatibility.convertTextToChatHelp")}</p>
 					</div>
 					<Switch
 						id="compat-convert-text-to-chat"
@@ -95,9 +98,9 @@ export default function CompatibilityView() {
 				<div className="flex items-center justify-between space-x-2">
 					<div className="space-y-0.5">
 						<label htmlFor="compat-convert-chat-to-responses" className="text-sm font-medium">
-							{t("configForms.compatibility.convertChatToResponses")}
+							{t("compatibility.convertChatToResponses")}
 						</label>
-						<p className="text-muted-foreground text-sm">{t("configForms.compatibility.convertChatToResponsesDescription")}</p>
+						<p className="text-muted-foreground text-sm">{t("compatibility.convertChatToResponsesHelp")}</p>
 					</div>
 					<Switch
 						id="compat-convert-chat-to-responses"
@@ -112,9 +115,9 @@ export default function CompatibilityView() {
 				<div className="flex items-center justify-between space-x-2">
 					<div className="space-y-0.5">
 						<label htmlFor="compat-should-drop-params" className="text-sm font-medium">
-							{t("configForms.compatibility.dropUnsupported")}
+							{t("compatibility.dropUnsupportedParams")}
 						</label>
-						<p className="text-muted-foreground text-sm">{t("configForms.compatibility.dropUnsupportedDescription")}</p>
+						<p className="text-muted-foreground text-sm">{t("compatibility.dropUnsupportedParamsHelp")}</p>
 					</div>
 					<Switch
 						id="compat-should-drop-params"
@@ -129,9 +132,9 @@ export default function CompatibilityView() {
 				<div className="flex items-center justify-between space-x-2">
 					<div className="space-y-0.5">
 						<label htmlFor="compat-should-convert-params" className="text-sm font-medium">
-							{t("configForms.compatibility.convertUnsupported")}
+							{t("compatibility.convertUnsupportedParams")}
 						</label>
-						<p className="text-muted-foreground text-sm">{t("configForms.compatibility.convertUnsupportedDescription")}</p>
+						<p className="text-muted-foreground text-sm">{t("compatibility.convertUnsupportedParamsHelp")}</p>
 					</div>
 					<Switch
 						id="compat-should-convert-params"
@@ -146,11 +149,9 @@ export default function CompatibilityView() {
 				<div className="flex items-center justify-between space-x-2">
 					<div className="space-y-0.5">
 						<label htmlFor="compat-azure-deepseek" className="text-sm font-medium">
-							Use Chat Completion APIs for Azure Deepseek models
+							{t("compatibility.azureDeepseek")}
 						</label>
-						<p className="text-muted-foreground text-sm">
-							Use Chat Completion APIs for Claude Code, Codex, etc. for Azure Deepseek models.
-						</p>
+						<p className="text-muted-foreground text-sm">{t("compatibility.azureDeepseekHelp")}</p>
 					</div>
 					<Switch
 						id="compat-azure-deepseek"
@@ -161,11 +162,45 @@ export default function CompatibilityView() {
 						disabled={!hasSettingsUpdateAccess}
 					/>
 				</div>
+
+				<div className="flex items-center justify-between space-x-2">
+					<div className="space-y-0.5">
+						<label htmlFor="compat-force-reasoning-only-models-to-responses" className="text-sm font-medium">
+							{t("compatibility.forceReasoningOnlyToResponses")}
+						</label>
+						<p className="text-muted-foreground text-sm">{t("compatibility.forceReasoningOnlyToResponsesHelp")}</p>
+					</div>
+					<Switch
+						id="compat-force-reasoning-only-models-to-responses"
+						data-testid="compat-force-reasoning-only-models-to-responses"
+						size="md"
+						checked={localCompatConfig.force_reasoning_only_models_to_responses ?? true}
+						onCheckedChange={(checked) => handleCompatChange("force_reasoning_only_models_to_responses", checked)}
+						disabled={!hasSettingsUpdateAccess}
+					/>
+				</div>
+
+				<div className="flex items-center justify-between space-x-2">
+					<div className="space-y-0.5">
+						<label htmlFor="compat-convert-decision-to-responses" className="text-sm font-medium">
+							{t("compatibility.convertDecisionToResponses")}
+						</label>
+						<p className="text-muted-foreground text-sm">{t("compatibility.convertDecisionToResponsesHelp")}</p>
+					</div>
+					<Switch
+						id="compat-convert-decision-to-responses"
+						data-testid="compat-convert-decision-to-responses"
+						size="md"
+						checked={localCompatConfig.convert_decision_to_responses ?? false}
+						onCheckedChange={(checked) => handleCompatChange("convert_decision_to_responses", checked)}
+						disabled={!hasSettingsUpdateAccess}
+					/>
+				</div>
 			</div>
 
-			<div className="flex justify-end pt-2">
+			<div className="bg-card sticky bottom-0 flex justify-end py-2">
 				<Button onClick={handleSave} disabled={!hasChanges || isLoading || !hasSettingsUpdateAccess} data-testid="compat-save-button">
-					{isLoading ? t("common.saving") : t("common.saveChanges")}
+					{isLoading ? t("saving") : t("saveChanges")}
 				</Button>
 			</div>
 		</div>

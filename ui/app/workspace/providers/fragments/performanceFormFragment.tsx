@@ -2,7 +2,6 @@ import { Button } from "@/components/ui/button";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { DefaultPerformanceConfig } from "@/lib/constants/config";
-import { useT } from "@/lib/i18n";
 import { getErrorMessage, setProviderFormDirtyState, useAppDispatch } from "@/lib/store";
 import { useUpdateProviderMutation } from "@/lib/store/apis/providersApi";
 import { ModelProvider } from "@/lib/types/config";
@@ -11,6 +10,7 @@ import { RbacOperation, RbacResource, useRbac } from "@enterprise/lib";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useEffect } from "react";
 import { useForm, type Resolver } from "react-hook-form";
+import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { buildProviderUpdatePayload } from "../views/utils";
 
@@ -19,7 +19,7 @@ interface PerformanceFormFragmentProps {
 }
 
 export function PerformanceFormFragment({ provider }: PerformanceFormFragmentProps) {
-	const t = useT();
+	const { t } = useTranslation("models");
 	const dispatch = useAppDispatch();
 	const hasUpdateProviderAccess = useRbac(RbacResource.ModelProvider, RbacOperation.Update);
 	const [updateProvider, { isLoading: isUpdatingProvider }] = useUpdateProviderMutation();
@@ -64,7 +64,7 @@ export function PerformanceFormFragment({ provider }: PerformanceFormFragmentPro
 				form.reset(data);
 			})
 			.catch((err) => {
-				toast.error(t("providers.configUpdateFailed"), {
+				toast.error(t("providers.failedUpdateConfig"), {
 					description: getErrorMessage(err),
 				});
 			});
@@ -152,7 +152,7 @@ export function PerformanceFormFragment({ provider }: PerformanceFormFragmentPro
 						disabled={!form.formState.isDirty || !hasUpdateProviderAccess || isUpdatingProvider}
 						isLoading={isUpdatingProvider}
 					>
-						{t("providers.perfForm.save")}
+						{t("providers.savePerformanceConfig")}
 					</Button>
 				</div>
 			</form>

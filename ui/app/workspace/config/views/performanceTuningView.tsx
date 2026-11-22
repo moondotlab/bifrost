@@ -2,16 +2,16 @@ import PageTitle from "@/components/pageTitle";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { useT } from "@/lib/i18n";
 import { getErrorMessage, useGetCoreConfigQuery, useUpdateCoreConfigMutation } from "@/lib/store";
 import { CoreConfig, DefaultCoreConfig } from "@/lib/types/config";
 import { RbacOperation, RbacResource, useRbac } from "@enterprise/lib";
 import { AlertTriangle } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 
 export default function PerformanceTuningView() {
-	const t = useT();
+	const { t } = useTranslation("config");
 	const hasSettingsUpdateAccess = useRbac(RbacResource.Settings, RbacOperation.Update);
 	const { data: bifrostConfig } = useGetCoreConfigQuery({ fromDB: true });
 	const config = bifrostConfig?.client_config;
@@ -68,21 +68,21 @@ export default function PerformanceTuningView() {
 			const maxBodySize = Number.parseInt(localValues.max_request_body_size_mb);
 
 			if (isNaN(poolSize) || poolSize <= 0) {
-				toast.error(t("configForms.performance.initialPoolSizeInvalid"));
+				toast.error(t("performance.toastPoolPositive"));
 				return;
 			}
 
 			if (isNaN(maxBodySize) || maxBodySize <= 0) {
-				toast.error(t("configForms.performance.maxBodySizeInvalid"));
+				toast.error(t("performance.toastBodyPositive"));
 				return;
 			}
 
 			if (!bifrostConfig) {
-				toast.error(t("configForms.configNotLoadedRefresh"));
+				toast.error(t("configNotLoadedRefresh"));
 				return;
 			}
 			await updateCoreConfig({ ...bifrostConfig, client_config: localConfig }).unwrap();
-			toast.success(t("configForms.performance.updated"));
+			toast.success(t("performance.toastSaved"));
 		} catch (error) {
 			toast.error(getErrorMessage(error));
 		}
@@ -90,22 +90,21 @@ export default function PerformanceTuningView() {
 
 	return (
 		<div className="mx-auto w-full max-w-4xl space-y-4">
-			<PageTitle title="Performance Tuning">{t("configForms.performance.pageDescription")}</PageTitle>
+			<PageTitle title={t("performance.title")}>{t("performance.description")}</PageTitle>
 
 			<Alert variant="destructive">
 				<AlertTriangle className="h-4 w-4" />
-				<AlertDescription>{t("configForms.restartAlert")}</AlertDescription>
+				<AlertDescription>{t("restartRequiredAlert")}</AlertDescription>
 			</Alert>
 
 			<div className="space-y-4">
-				{/* Initial Pool Size */}
 				<div>
 					<div className="flex items-center justify-between space-x-2 rounded-sm border p-4">
 						<div className="space-y-0.5">
 							<label htmlFor="initial-pool-size" className="text-sm font-medium">
-								{t("configForms.performance.initialPoolSize")}
+								{t("performance.initialPoolSize")}
 							</label>
-							<p className="text-muted-foreground text-sm">{t("configForms.performance.initialPoolSizeDescription")}</p>
+							<p className="text-muted-foreground text-sm">{t("performance.initialPoolSizeHelp")}</p>
 						</div>
 						<Input
 							id="initial-pool-size"
@@ -119,14 +118,13 @@ export default function PerformanceTuningView() {
 					{needsRestart && <RestartWarning />}
 				</div>
 
-				{/* Max Request Body Size */}
 				<div>
 					<div className="flex items-center justify-between space-x-2 rounded-sm border p-4">
 						<div className="space-y-0.5">
 							<label htmlFor="max-request-body-size-mb" className="text-sm font-medium">
-								{t("configForms.performance.maxBodySize")}
+								{t("performance.maxRequestBodySize")}
 							</label>
-							<p className="text-muted-foreground text-sm">{t("configForms.performance.maxBodySizeDescription")}</p>
+							<p className="text-muted-foreground text-sm">{t("performance.maxRequestBodySizeHelp")}</p>
 						</div>
 						<Input
 							id="max-request-body-size-mb"
@@ -140,9 +138,9 @@ export default function PerformanceTuningView() {
 					{needsRestart && <RestartWarning />}
 				</div>
 			</div>
-			<div className="flex justify-end pt-2">
+			<div className="bg-card sticky bottom-0 flex justify-end py-2">
 				<Button onClick={handleSave} disabled={!hasChanges || isLoading || !hasSettingsUpdateAccess}>
-					{isLoading ? t("common.saving") : t("common.saveChanges")}
+					{isLoading ? t("saving") : t("saveChanges")}
 				</Button>
 			</div>
 		</div>
@@ -150,6 +148,6 @@ export default function PerformanceTuningView() {
 }
 
 const RestartWarning = () => {
-	const t = useT();
-	return <div className="text-muted-foreground mt-2 pl-4 text-xs font-semibold">{t("configForms.restartToApply")}</div>;
+	const { t } = useTranslation("config");
+	return <div className="text-muted-foreground mt-2 pl-4 text-xs font-semibold">{t("restartWarning")}</div>;
 };

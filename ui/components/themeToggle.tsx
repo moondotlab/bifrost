@@ -1,22 +1,22 @@
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdownMenu";
-import { useT, type MessageKey } from "@/lib/i18n";
 import { Check, Laptop, Moon, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
+import { useTranslation } from "react-i18next";
 
-const THEMES: { value: "light" | "dark" | "system"; labelKey: MessageKey; icon: typeof Sun }[] = [
+const THEMES = [
 	{ value: "light", labelKey: "theme.light", icon: Sun },
 	{ value: "dark", labelKey: "theme.dark", icon: Moon },
 	{ value: "system", labelKey: "theme.system", icon: Laptop },
-];
+] as const;
 
 /**
  * The theme choices as bare dropdown items, so they can be embedded in a larger
  * menu (e.g. the topbar account menu) rather than only in their own popover.
  */
 export function ThemeToggleItems() {
+	const { t } = useTranslation("common");
 	const { theme, setTheme } = useTheme();
-	const t = useT();
 
 	return (
 		<>
@@ -32,8 +32,7 @@ export function ThemeToggleItems() {
 }
 
 export function ThemeToggle() {
-	const t = useT();
-
+	const { t } = useTranslation("common");
 	return (
 		<DropdownMenu>
 			<DropdownMenuTrigger asChild>
@@ -42,7 +41,7 @@ export function ThemeToggle() {
 					size="icon"
 					// size-8 box around a size-4 glyph, matching the notification and menu triggers. Equal boxes are
 					// what keep the topbar icons evenly spaced and open their menus on the same line.
-					className="text-muted-foreground hover:bg-accent hover:text-accent-foreground data-[state=open]:bg-card data-[state=open]:text-accent-foreground size-8 border-0 ring-offset-0 outline-none select-none focus-visible:ring-0 data-[state=open]:border"
+					className="text-muted-foreground hover:bg-accent hover:text-accent-foreground data-[state=open]:bg-card data-[state=open]:text-accent-foreground size-8 border-0 outline-none select-none focus-visible:ring-0 focus-visible:ring-offset-0 data-[state=open]:border"
 				>
 					<Sun className="size-4 scale-100 rotate-0 transition-all dark:scale-0 dark:-rotate-90" strokeWidth={2} />
 					<Moon className="absolute size-4 scale-0 rotate-90 transition-all dark:scale-100 dark:rotate-0" strokeWidth={2} />

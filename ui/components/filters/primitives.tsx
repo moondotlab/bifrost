@@ -3,10 +3,10 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TruncatedLabel } from "@/components/ui/truncatedLabel";
-import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { ChevronDown, LoaderCircle, Plus, Search } from "lucide-react";
-import { Ref, useEffect, useRef, useState } from "react";
+import { Ref, useEffect, useMemo, useRef, useState } from "react";
+import { Trans, useTranslation } from "react-i18next";
 
 // Building blocks shared by the filter sidebars (logs, MCP logs, webhook
 // deliveries). Lifted verbatim out of mcpFilterSidebar.tsx, where they had been
@@ -136,8 +136,8 @@ export function SearchableCheckboxList({
 	onSearch?: (query: string) => void;
 	fetching?: boolean;
 }) {
-	const t = useT();
-	const resolvedPlaceholder = placeholder ?? t("common.search");
+	const { t } = useTranslation("governance");
+	const resolvedPlaceholder = placeholder ?? t("filters.search");
 	const [query, setQuery] = useState("");
 	const normalized = query.trim().toLowerCase();
 	const filtered = normalized ? items.filter((item) => item.label.toLowerCase().includes(normalized)) : items;
@@ -203,7 +203,7 @@ export function SearchableCheckboxList({
 				/>
 			))}
 			{filtered.length === 0 && !showAddCustom && (
-				<div className="text-muted-foreground flex h-9 items-center px-3 text-xs">{t("common.noResultsShort")}</div>
+				<div className="text-muted-foreground flex h-9 items-center px-3 text-xs">{t("filters.noResults")}</div>
 			)}
 			{showAddCustom && (
 				<button
@@ -213,9 +213,116 @@ export function SearchableCheckboxList({
 					data-testid={testIdPrefix ? `${testIdPrefix}-add-custom` : undefined}
 				>
 					<Plus className="text-muted-foreground size-3.5 shrink-0" />
-					<span className="truncate">{t("common.useValue", { value: trimmed })}</span>
+					<span className="truncate">
+						<Trans
+							t={t}
+							i18nKey="filters.useValue"
+							values={{ value: trimmed }}
+							components={{ medium0: <span className="font-medium" /> }}
+						/>
+					</span>
 				</button>
 			)}
 		</>
+	);
+}
+
+// ---------------------------------------------------------------------------
+// EntityFilter – one dimension's ids listed by name and searched on the
+// server. Shared by the Relay and MCP log sidebars; each passes its own
+// filter-data query hook.
+// ---------------------------------------------------------------------------
+
+/** An id and its display name, as a filter dimension offers it. */
+export interface FilterEntity {
+	id: string;
+	name: string;
+}
+
+/** A logs page's filter-data query hook, called with one dimension and the search text. */
+export type EntityFilterDataHook = (
+	arg: { dimensions: string[]; q?: string },
+	options: { skip: boolean },
+) => { data?: object; isUninitialized: boolean; isLoading: boolean; isFetching: boolean };
+
+/** The keys of a filters object that hold a list of ids. */
+type IdListKey<F> = { [K in keyof F]-?: NonNullable<F[K]> extends string[] ? K : never }[keyof F];
+
+interface EntityFilterProps<F extends object> {
+	filters: F;
+	onFiltersChange: (filters: F) => void;
+	defaultOpen?: boolean;
+	filterKey: IdListKey<F>;
+	/** The filter-data dimension the options come from, such as "teams". */
+	dimension: string;
+	useFilterData: EntityFilterDataHook;
+	title: string;
+	placeholder: string;
+	testIdPrefix: string;
+	/** Lets the user add an id that is not in the list (the LLM sidebar's "Search or add ..."). */
+	allowCustom?: boolean;
+}
+
+export function EntityFilter<F extends object>({
+	filters,
+	onFiltersChange,
+	defaultOpen,
+	filterKey,
+	dimension,
+	useFilterData,
+	title,
+	placeholder,
+	testIdPrefix,
+	allowCustom,
+}: EntityFilterProps<F>) {
+	const selectedValues = filters[filterKey] as string[] | undefined;
+	const selected = useMemo(() => selectedValues ?? [], [selectedValues]);
+	const hasActive = selected.length > 0;
+	const [opened, setOpened] = useState(!!defaultOpen || hasActive);
+	const searchInputRef = useAutoFocusOnOpen(opened);
+	const [searchQuery, setSearchQuery] = useState("");
+	const {
+		data: filterData,
+		isUninitialized,
+		isLoading,
+		isFetching,
+	} = useFilterData({ dimensions: [dimension], q: searchQuery || undefined }, { skip: !opened && !hasActive });
+	// The hook returns the page's whole filter-data response; this section reads its own dimension.
+	const available: FilterEntity[] = useMemo(
+		() => (filterData as Partial<Record<string, FilterEntity[]>> | undefined)?.[dimension] ?? [],
+		[filterData, dimension],
+	);
+	const items = useMemo(() => {
+		const seen = new Set(available.map((e) => e.id));
+		const extras = selected.filter((id) => !seen.has(id));
+		return [...available.map((e) => ({ key: e.id, label: e.name || e.id })), ...extras.map((id) => ({ key: id, label: id }))];
+	}, [available, selected]);
+
+	if (!isUninitialized && !isLoading && available.length === 0 && !hasActive && !opened && !searchQuery) return null;
+
+	return (
+		<FilterSection
+			title={title}
+			defaultOpen={!!defaultOpen || hasActive}
+			loading={isLoading}
+			onOpenChange={setOpened}
+			testId={`${testIdPrefix}-toggle`}
+		>
+			<SearchableCheckboxList
+				inputRef={searchInputRef}
+				placeholder={placeholder}
+				items={items}
+				allowCustom={allowCustom}
+				isSelected={(id) => selected.includes(id)}
+				onToggle={(id) => {
+					const next = selected.includes(id) ? selected.filter((v) => v !== id) : [...selected, id];
+					onFiltersChange({ ...filters, [filterKey]: next });
+				}}
+				onSearch={setSearchQuery}
+				fetching={isFetching}
+				testIdPrefix={testIdPrefix}
+				normalizeTestIdKey
+			/>
+		</FilterSection>
 	);
 }

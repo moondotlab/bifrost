@@ -7,16 +7,24 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { DefaultNetworkConfig } from "@/lib/constants/config";
-import { usePlural, useT, type MessageKey } from "@/lib/i18n";
 import { getErrorMessage, setProviderFormDirtyState, useAppDispatch } from "@/lib/store";
 import { useUpdateProviderMutation } from "@/lib/store/apis/providersApi";
-import { ModelProvider, isKnownProvider } from "@/lib/types/config";
+import { ModelProvider, NetworkConfig, isKnownProvider } from "@/lib/types/config";
 import { networkOnlyFormSchema, type SecretVar, type NetworkOnlyFormSchema } from "@/lib/types/schemas";
-import { toSecretVarFormValue, toOptionalSecretVarPayload } from "@/lib/utils/secretVarForm";
+import {
+	clearUnrestorableMaskedHeaders,
+	headerSecretVarsEqual,
+	toExtraHeadersPayload,
+	toOptionalSecretVarPayload,
+	toSecretVarFormValue,
+	toSecretVarMapFormValue,
+} from "@/lib/utils/secretVarForm";
 import { RbacOperation, RbacResource, useRbac } from "@enterprise/lib";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useEffect } from "react";
+import { TFunction } from "i18next";
+import { useEffect, useMemo } from "react";
 import { useForm, type Resolver } from "react-hook-form";
+import { Trans, useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { buildProviderUpdatePayload } from "../views/utils";
 
@@ -24,32 +32,31 @@ interface NetworkFormFragmentProps {
 	provider: ModelProvider;
 }
 
-type PluralFn = (key: MessageKey, count: number) => string;
-
 // seconds to human readable time
-const secondsToHumanReadable = (seconds: number, plural: PluralFn) => {
+const secondsToHumanReadable = (seconds: number, t: TFunction<"models">) => {
 	// Handle edge cases
 	if (!seconds || seconds < 0 || isNaN(seconds)) {
-		return plural("providers.networkConfig.second", 0);
+		return t("providers.network.zeroSeconds");
 	}
 	seconds = Math.floor(seconds);
+	const unit = (key: "second" | "minute" | "hour" | "day", count: number) => t(`providers.network.${key}`, { count });
 	if (seconds < 60) {
-		return plural("providers.networkConfig.second", seconds);
+		return unit("second", seconds);
 	}
 	if (seconds < 3600) {
 		const minutes = Math.floor(seconds / 60);
 		const remainingSeconds = seconds % 60;
-		const parts: string[] = [plural("providers.networkConfig.minute", minutes)];
-		if (remainingSeconds > 0) parts.push(plural("providers.networkConfig.second", remainingSeconds));
+		const parts: string[] = [unit("minute", minutes)];
+		if (remainingSeconds > 0) parts.push(unit("second", remainingSeconds));
 		return parts.join(" ");
 	}
 	if (seconds < 86400) {
 		const hours = Math.floor(seconds / 3600);
 		const minutes = Math.floor((seconds % 3600) / 60);
 		const remainingSeconds = seconds % 60;
-		const parts: string[] = [plural("providers.networkConfig.hour", hours)];
-		if (minutes > 0) parts.push(plural("providers.networkConfig.minute", minutes));
-		if (remainingSeconds > 0) parts.push(plural("providers.networkConfig.second", remainingSeconds));
+		const parts: string[] = [unit("hour", hours)];
+		if (minutes > 0) parts.push(unit("minute", minutes));
+		if (remainingSeconds > 0) parts.push(unit("second", remainingSeconds));
 		return parts.join(" ");
 	}
 	// For >= 1 day, only show non-zero components
@@ -58,20 +65,23 @@ const secondsToHumanReadable = (seconds: number, plural: PluralFn) => {
 	const minutes = Math.floor((seconds % 3600) / 60);
 	const remainingSeconds = seconds % 60;
 	const parts: string[] = [];
-	parts.push(plural("providers.networkConfig.day", days));
-	if (hours > 0) parts.push(plural("providers.networkConfig.hour", hours));
-	if (minutes > 0) parts.push(plural("providers.networkConfig.minute", minutes));
-	if (remainingSeconds > 0) parts.push(plural("providers.networkConfig.second", remainingSeconds));
+	parts.push(unit("day", days));
+	if (hours > 0) parts.push(unit("hour", hours));
+	if (minutes > 0) parts.push(unit("minute", minutes));
+	if (remainingSeconds > 0) parts.push(unit("second", remainingSeconds));
 	return parts.join(" ");
 };
 
 export function NetworkFormFragment({ provider }: NetworkFormFragmentProps) {
-	const t = useT();
-	const plural = usePlural();
+	const { t } = useTranslation("models");
 	const dispatch = useAppDispatch();
 	const hasUpdateProviderAccess = useRbac(RbacResource.ModelProvider, RbacOperation.Update);
 	const [updateProvider, { isLoading: isUpdatingProvider }] = useUpdateProviderMutation();
 	const isCustomProvider = !isKnownProvider(provider.name as string);
+	const storedHeaderNames = useMemo(
+		() => new Set(Object.keys(provider.network_config?.extra_headers ?? {})),
+		[provider.network_config?.extra_headers],
+	);
 
 	const form = useForm<NetworkOnlyFormSchema, any, NetworkOnlyFormSchema>({
 		resolver: zodResolver(networkOnlyFormSchema) as Resolver<NetworkOnlyFormSchema, any, NetworkOnlyFormSchema>,
@@ -80,7 +90,9 @@ export function NetworkFormFragment({ provider }: NetworkFormFragmentProps) {
 		defaultValues: {
 			network_config: {
 				base_url: provider.network_config?.base_url || undefined,
-				extra_headers: provider.network_config?.extra_headers,
+				extra_headers: toSecretVarMapFormValue(
+					provider.network_config?.extra_headers_secret_vars ?? provider.network_config?.extra_headers,
+				),
 				default_request_timeout_in_seconds:
 					provider.network_config?.default_request_timeout_in_seconds ?? DefaultNetworkConfig.default_request_timeout_in_seconds,
 				max_retries: provider.network_config?.max_retries ?? DefaultNetworkConfig.max_retries,
@@ -101,26 +113,39 @@ export function NetworkFormFragment({ provider }: NetworkFormFragmentProps) {
 		},
 	});
 
+	const watchedHeaders = form.watch("network_config.extra_headers");
+	const defaultHeaders = form.formState.defaultValues?.network_config?.extra_headers as Record<string, SecretVar> | undefined;
+	const isDirty = form.formState.isDirty || !headerSecretVarsEqual(watchedHeaders, defaultHeaders);
+
 	useEffect(() => {
-		dispatch(setProviderFormDirtyState(form.formState.isDirty));
-	}, [form.formState.isDirty, dispatch]);
+		dispatch(setProviderFormDirtyState(isDirty));
+	}, [isDirty, dispatch]);
 
 	const onSubmit = (data: NetworkOnlyFormSchema) => {
 		const requiresBaseUrl = isCustomProvider;
 		if (requiresBaseUrl && (data.network_config?.base_url ?? "").trim() === "") {
 			if ((provider.network_config?.base_url ?? "").trim() !== "") {
-				toast.error(t("providers.networkConfig.cannotRemove"));
+				toast.error(t("providers.cannotRemoveNetwork"));
 			} else {
-				toast.error(t("providers.networkConfig.baseUrlRequired"));
+				toast.error(t("providers.baseUrlRequired"));
 			}
 			return;
 		}
+		const extraHeaders = data.network_config?.extra_headers
+			? toExtraHeadersPayload(data.network_config.extra_headers, storedHeaderNames)
+			: undefined;
+		if (extraHeaders && extraHeaders.missingValues.length > 0) {
+			toast.error(t("providers.extraHeaderValueRequired", { names: extraHeaders.missingValues.join(", ") }));
+			return;
+		}
+		// extra_headers_secret_vars is response-only, so it is not sent back
+		const { extra_headers_secret_vars: _headerSecretVars, ...storedNetworkConfig }: Partial<NetworkConfig> = provider.network_config ?? {};
 		// Create updated provider configuration
 		const updatedProvider = buildProviderUpdatePayload(provider, {
 			network_config: {
-				...provider.network_config,
+				...storedNetworkConfig,
 				base_url: data.network_config?.base_url || undefined,
-				extra_headers: data.network_config?.extra_headers || undefined,
+				extra_headers: extraHeaders?.headers,
 				default_request_timeout_in_seconds:
 					data.network_config?.default_request_timeout_in_seconds ?? DefaultNetworkConfig.default_request_timeout_in_seconds,
 				max_retries: data.network_config?.max_retries ?? 0,
@@ -146,7 +171,7 @@ export function NetworkFormFragment({ provider }: NetworkFormFragmentProps) {
 				form.reset(data);
 			})
 			.catch((err) => {
-				toast.error(t("providers.configUpdateFailed"), {
+				toast.error(t("providers.failedUpdateConfig"), {
 					description: getErrorMessage(err),
 				});
 			});
@@ -157,7 +182,9 @@ export function NetworkFormFragment({ provider }: NetworkFormFragmentProps) {
 		form.reset({
 			network_config: {
 				base_url: provider.network_config?.base_url || undefined,
-				extra_headers: provider.network_config?.extra_headers,
+				extra_headers: toSecretVarMapFormValue(
+					provider.network_config?.extra_headers_secret_vars ?? provider.network_config?.extra_headers,
+				),
 				default_request_timeout_in_seconds:
 					provider.network_config?.default_request_timeout_in_seconds ?? DefaultNetworkConfig.default_request_timeout_in_seconds,
 				max_retries: provider.network_config?.max_retries ?? DefaultNetworkConfig.max_retries,
@@ -197,11 +224,13 @@ export function NetworkFormFragment({ provider }: NetworkFormFragmentProps) {
 								render={({ field }) => (
 									<FormItem>
 										<FormLabel>
-											{t(baseURLRequired ? "providers.labelRequired" : "providers.labelOptional", { label: t("providers.baseURL") })}
+											{baseURLRequired ? t("providers.network.baseUrlRequired") : t("providers.network.baseUrlOptional")}
 										</FormLabel>
 										<FormControl>
 											<Input
-												placeholder={isCustomProvider ? "https://api.your-provider.com" : "https://api.example.com"}
+												placeholder={
+													isCustomProvider ? t("providers.network.baseUrlCustomPlaceholder") : t("providers.network.baseUrlPlaceholder")
+												}
 												{...field}
 												value={field.value || ""}
 												disabled={!hasUpdateProviderAccess}
@@ -218,7 +247,7 @@ export function NetworkFormFragment({ provider }: NetworkFormFragmentProps) {
 								name="network_config.default_request_timeout_in_seconds"
 								render={({ field }) => (
 									<FormItem className="flex-1">
-										<FormLabel>{t("providers.networkConfig.timeoutSeconds")}</FormLabel>
+										<FormLabel>{t("providers.network.timeoutSeconds")}</FormLabel>
 										<FormControl>
 											<Input
 												placeholder="30"
@@ -239,7 +268,7 @@ export function NetworkFormFragment({ provider }: NetworkFormFragmentProps) {
 												}}
 											/>
 										</FormControl>
-										<FormDescription>{secondsToHumanReadable(field.value, plural)}</FormDescription>
+										<FormDescription>{secondsToHumanReadable(field.value, t)}</FormDescription>
 										<FormMessage />
 									</FormItem>
 								)}
@@ -249,7 +278,7 @@ export function NetworkFormFragment({ provider }: NetworkFormFragmentProps) {
 								name="network_config.stream_idle_timeout_in_seconds"
 								render={({ field }) => (
 									<FormItem className="flex-1">
-										<FormLabel>{t("providers.networkConfig.streamIdleTimeout")}</FormLabel>
+										<FormLabel>{t("providers.network.streamIdleTimeout")}</FormLabel>
 										<FormControl>
 											<Input
 												placeholder="60"
@@ -272,8 +301,7 @@ export function NetworkFormFragment({ provider }: NetworkFormFragmentProps) {
 											/>
 										</FormControl>
 										<FormDescription>
-											{field.value ? `${secondsToHumanReadable(field.value, plural)} ` : ""}
-											{t("providers.networkConfig.streamIdleHint")}
+											{field.value ? secondsToHumanReadable(field.value, t) : ""} {t("providers.network.streamIdleHelp")}
 										</FormDescription>
 										<FormMessage />
 									</FormItem>
@@ -284,7 +312,7 @@ export function NetworkFormFragment({ provider }: NetworkFormFragmentProps) {
 								name="network_config.max_retries"
 								render={({ field }) => (
 									<FormItem className="flex-1">
-										<FormLabel>{t("providers.maxRetries")}</FormLabel>
+										<FormLabel>{t("providers.network.maxRetries")}</FormLabel>
 										<FormControl>
 											<Input
 												placeholder="0"
@@ -316,10 +344,10 @@ export function NetworkFormFragment({ provider }: NetworkFormFragmentProps) {
 								name="network_config.retry_backoff_initial"
 								render={({ field }) => (
 									<FormItem className="flex-1">
-										<FormLabel>{t("providers.networkConfig.initialBackoff")}</FormLabel>
+										<FormLabel>{t("providers.network.initialBackoff")}</FormLabel>
 										<FormControl>
 											<Input
-												placeholder="e.g 500"
+												placeholder={t("providers.network.placeholderInitialBackoff")}
 												{...field}
 												value={field.value === undefined || Number.isNaN(field.value) ? "" : field.value}
 												disabled={!hasUpdateProviderAccess}
@@ -346,10 +374,10 @@ export function NetworkFormFragment({ provider }: NetworkFormFragmentProps) {
 								name="network_config.retry_backoff_max"
 								render={({ field }) => (
 									<FormItem className="flex-1">
-										<FormLabel>{t("providers.networkConfig.maxBackoff")}</FormLabel>
+										<FormLabel>{t("providers.network.maxBackoff")}</FormLabel>
 										<FormControl>
 											<Input
-												placeholder="e.g 10000"
+												placeholder={t("providers.network.placeholderMaxBackoff")}
 												{...field}
 												value={field.value === undefined || Number.isNaN(field.value) ? "" : field.value}
 												disabled={!hasUpdateProviderAccess}
@@ -378,7 +406,7 @@ export function NetworkFormFragment({ provider }: NetworkFormFragmentProps) {
 								name="network_config.max_conns_per_host"
 								render={({ field }) => (
 									<FormItem className="flex-1">
-										<FormLabel>{t("providers.networkConfig.maxConnsPerHost")}</FormLabel>
+										<FormLabel>{t("providers.network.maxConnsPerHost")}</FormLabel>
 										<FormControl>
 											<Input
 												data-testid="network-config-max-conns-per-host-input"
@@ -400,7 +428,7 @@ export function NetworkFormFragment({ provider }: NetworkFormFragmentProps) {
 												}}
 											/>
 										</FormControl>
-										<FormDescription>{t("providers.networkConfig.maxConnsHint")}</FormDescription>
+										<FormDescription>{t("providers.network.maxConnsHelp")}</FormDescription>
 										<FormMessage />
 									</FormItem>
 								)}
@@ -410,7 +438,7 @@ export function NetworkFormFragment({ provider }: NetworkFormFragmentProps) {
 								name="network_config.keep_alive_timeout_in_seconds"
 								render={({ field }) => (
 									<FormItem className="flex-1">
-										<FormLabel>{t("providers.networkConfig.keepAliveTimeout")}</FormLabel>
+										<FormLabel>{t("providers.network.keepAliveTimeout")}</FormLabel>
 										<FormControl>
 											<Input
 												data-testid="network-config-keep-alive-timeout-input"
@@ -433,8 +461,7 @@ export function NetworkFormFragment({ provider }: NetworkFormFragmentProps) {
 											/>
 										</FormControl>
 										<FormDescription>
-											{field.value ? `${secondsToHumanReadable(field.value, plural)} ` : ""}
-											{t("providers.networkConfig.keepAliveHint")}
+											{field.value ? secondsToHumanReadable(field.value, t) : ""} {t("providers.network.keepAliveHelp")}
 										</FormDescription>
 										<FormMessage />
 									</FormItem>
@@ -447,8 +474,8 @@ export function NetworkFormFragment({ provider }: NetworkFormFragmentProps) {
 							render={({ field }) => (
 								<FormItem className="flex flex-row items-center justify-between">
 									<div className="space-y-0.5">
-										<FormLabel>{t("providers.networkConfig.enforceHttp2")}</FormLabel>
-										<FormDescription>{t("providers.networkConfig.enforceHttp2Hint")}</FormDescription>
+										<FormLabel>{t("providers.network.enforceHttp2")}</FormLabel>
+										<FormDescription>{t("providers.network.enforceHttp2Help")}</FormDescription>
 									</div>
 									<FormControl>
 										<Switch
@@ -466,7 +493,7 @@ export function NetworkFormFragment({ provider }: NetworkFormFragmentProps) {
 							name="network_config.http2_ping_interval_in_seconds"
 							render={({ field }) => (
 								<FormItem>
-									<FormLabel>{t("providers.networkConfig.http2PingInterval")}</FormLabel>
+									<FormLabel>{t("providers.network.http2PingInterval")}</FormLabel>
 									<FormControl>
 										<Input
 											data-testid="network-config-http2-ping-interval-input"
@@ -489,8 +516,7 @@ export function NetworkFormFragment({ provider }: NetworkFormFragmentProps) {
 										/>
 									</FormControl>
 									<FormDescription>
-										{field.value ? `${secondsToHumanReadable(field.value, plural)} ` : ""}
-										{t("providers.networkConfig.http2PingHint")}
+										{field.value ? secondsToHumanReadable(field.value, t) : ""} {t("providers.network.http2PingHelp")}
 									</FormDescription>
 									<FormMessage />
 								</FormItem>
@@ -502,8 +528,10 @@ export function NetworkFormFragment({ provider }: NetworkFormFragmentProps) {
 							render={({ field }) => (
 								<FormItem className="flex flex-row items-center justify-between">
 									<div className="space-y-0.5">
-										<FormLabel>{t("providers.networkConfig.allowPrivateNetwork")}</FormLabel>
-										<FormDescription>{t("providers.networkConfig.allowPrivateNetworkHint")}</FormDescription>
+										<FormLabel>{t("providers.allowPrivateNetwork")}</FormLabel>
+										<FormDescription>
+											<Trans t={t} i18nKey="providers.network.allowPrivateHelp" components={{ code: <code /> }} />
+										</FormDescription>
 									</div>
 									<FormControl>
 										<Switch
@@ -524,13 +552,17 @@ export function NetworkFormFragment({ provider }: NetworkFormFragmentProps) {
 									<FormControl>
 										<HeadersTable
 											value={field.value || {}}
-											onChange={field.onChange}
-											keyPlaceholder={t("providers.networkConfig.headerName")}
-											valuePlaceholder={t("providers.networkConfig.headerValue")}
-											label={t("providers.networkConfig.extraHeaders")}
+											onChange={(headers) => field.onChange(clearUnrestorableMaskedHeaders(headers, storedHeaderNames))}
+											keyPlaceholder={t("providers.headerName")}
+											valuePlaceholder={t("providers.headerValue")}
+											label={t("providers.extraHeaders")}
 											disabled={!hasUpdateProviderAccess}
+											useSecretVarInput
 										/>
 									</FormControl>
+									<FormDescription>
+										<Trans t={t} i18nKey="providers.extraHeadersSecretHelp" components={{ code: <code /> }} />
+									</FormDescription>
 									<FormMessage />
 								</FormItem>
 							)}
@@ -538,7 +570,7 @@ export function NetworkFormFragment({ provider }: NetworkFormFragmentProps) {
 						<Accordion type="single" collapsible className="w-full">
 							<AccordionItem value="tls-config" className="border-b-0">
 								<AccordionTrigger className="py-0" data-testid="tls-config-trigger">
-									<span className="text-sm font-medium">{t("providers.networkConfig.tlsCertificate")}</span>
+									<span className="text-sm font-medium">{t("providers.network.tlsCertificate")}</span>
 								</AccordionTrigger>
 								<AccordionContent className="space-y-4 pt-4 pb-0">
 									<FormField
@@ -547,8 +579,8 @@ export function NetworkFormFragment({ provider }: NetworkFormFragmentProps) {
 										render={({ field }) => (
 											<FormItem className="flex flex-row items-center justify-between rounded-lg border p-4">
 												<div className="space-y-0.5">
-													<FormLabel>{t("providers.networkConfig.skipTls")}</FormLabel>
-													<FormDescription>{t("providers.networkConfig.skipTlsHint")}</FormDescription>
+													<FormLabel>{t("providers.network.skipTls")}</FormLabel>
+													<FormDescription>{t("providers.network.skipTlsHelp")}</FormDescription>
 												</div>
 												<FormControl>
 													<Switch
@@ -566,13 +598,11 @@ export function NetworkFormFragment({ provider }: NetworkFormFragmentProps) {
 										name="network_config.ca_cert_pem"
 										render={({ field }) => (
 											<FormItem>
-												<FormLabel>{t("providers.labelOptional", { label: t("providers.networkConfig.caCertPem") })}</FormLabel>
+												<FormLabel>{t("providers.caCertPemOptional")}</FormLabel>
 												<FormControl>
 													<SecretVarInput
 														variant="textarea"
-														placeholder={`-----BEGIN CERTIFICATE-----
-...
------END CERTIFICATE----- or env.OPENAI_CA_CERT_PEM`}
+														placeholder={t("providers.network.caCertPlaceholder")}
 														className="font-mono text-xs"
 														rows={6}
 														hideValueWhenEnv
@@ -583,7 +613,7 @@ export function NetworkFormFragment({ provider }: NetworkFormFragmentProps) {
 														data-testid="network-config-ca-cert-pem"
 													/>
 												</FormControl>
-												<FormDescription>{t("providers.networkConfig.caCertPemHint")}</FormDescription>
+												<FormDescription>{t("providers.network.caCertPemHelp")}</FormDescription>
 												<FormMessage />
 											</FormItem>
 										)}
@@ -614,24 +644,24 @@ export function NetworkFormFragment({ provider }: NetworkFormFragmentProps) {
 								provider.network_config.base_url.trim() === ""
 							}
 						>
-							{t("providers.removeConfig")}
+							{t("providers.removeConfiguration")}
 						</Button>
 					)}
 					<TooltipProvider>
 						<Tooltip>
 							<TooltipTrigger asChild>
-								<Button type="submit" disabled={!form.formState.isDirty || !hasUpdateProviderAccess} isLoading={isUpdatingProvider}>
-									{t("providers.networkConfig.save")}
+								<Button type="submit" disabled={!isDirty || !hasUpdateProviderAccess} isLoading={isUpdatingProvider}>
+									{t("providers.saveNetworkConfig")}
 								</Button>
 							</TooltipTrigger>
-							{(!form.formState.isDirty || !form.formState.isValid) && (
+							{(!isDirty || !form.formState.isValid) && (
 								<TooltipContent>
 									<p>
-										{!form.formState.isDirty && !form.formState.isValid
-											? t("providers.networkConfig.noChangesAndErrors")
-											: !form.formState.isDirty
-												? t("providers.networkConfig.noChanges")
-												: t("providers.networkConfig.fixValidation")}
+										{!isDirty && !form.formState.isValid
+											? t("providers.noChangesAndValidation")
+											: !isDirty
+												? t("providers.noChanges")
+												: t("providers.pleaseFixValidation")}
 									</p>
 								</TooltipContent>
 							)}

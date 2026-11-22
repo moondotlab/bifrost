@@ -2,20 +2,39 @@ import PageTitle from "@/components/pageTitle";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { MultiSelect } from "@/components/ui/multiSelect";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import { useT } from "@/lib/i18n";
 import { getErrorMessage, useGetCoreConfigQuery, useUpdateCoreConfigMutation } from "@/lib/store";
+import { getRequestTypeLabel, RequestTypes } from "@/lib/constants/logs";
 import { CoreConfig, DefaultCoreConfig } from "@/lib/types/config";
 import { parseArrayFromText } from "@/lib/utils/array";
 import { RbacOperation, RbacResource, useRbac } from "@enterprise/lib";
+import type { TFunction } from "i18next";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Trans, useTranslation } from "react-i18next";
 import { toast } from "sonner";
 
+// Every known request type, plus any stored value the UI does not know about yet
+// (for example a type set from config.json on a newer server) so it stays selectable.
+const hiddenRequestTypeOptions = (selected: string[], tObs: TFunction<"observability">) => {
+	const known = new Set<string>(RequestTypes);
+	const extra = selected.filter((requestType) => !known.has(requestType));
+	return [...RequestTypes, ...extra].map((requestType) => ({ value: requestType, label: getRequestTypeLabel(requestType, tObs) }));
+};
+
+// Order-independent equality; the multi-select emits values in selection order.
+const sameRequestTypes = (a: string[] | undefined, b: string[] | undefined): boolean => {
+	const left = [...(a || [])].sort();
+	const right = [...(b || [])].sort();
+	return left.length === right.length && left.every((value, index) => value === right[index]);
+};
+
 export default function LoggingView() {
-	const t = useT();
+	const { t } = useTranslation("config");
+	const { t: tObs } = useTranslation("observability");
 	const hasSettingsUpdateAccess = useRbac(RbacResource.Settings, RbacOperation.Update);
-	const { data: bifrostConfig } = useGetCoreConfigQuery({ fromDB: true });
+	const { data: bifrostConfig, isLoading: isConfigLoading, isError: isConfigError } = useGetCoreConfigQuery({ fromDB: true });
 	const config = bifrostConfig?.client_config;
 	const [updateCoreConfig, { isLoading }] = useUpdateCoreConfigMutation();
 	const [localConfig, setLocalConfig] = useState<CoreConfig>(DefaultCoreConfig);
@@ -39,7 +58,8 @@ export default function LoggingView() {
 			localConfig.allow_per_request_raw_override !== config.allow_per_request_raw_override ||
 			localConfig.log_retention_days !== config.log_retention_days ||
 			localConfig.hide_deleted_virtual_keys_in_filters !== config.hide_deleted_virtual_keys_in_filters ||
-			JSON.stringify(localConfig.logging_headers || []) !== JSON.stringify(config.logging_headers || [])
+			JSON.stringify(localConfig.logging_headers || []) !== JSON.stringify(config.logging_headers || []) ||
+			!sameRequestTypes(localConfig.hidden_request_types, config.hidden_request_types)
 		);
 	}, [config, localConfig]);
 
@@ -59,19 +79,19 @@ export default function LoggingView() {
 
 	const handleSave = useCallback(async () => {
 		if (!bifrostConfig) {
-			toast.error(t("logging.configNotLoaded"));
+			toast.error(t("configNotLoaded"));
 			return;
 		}
 
 		// Validate log retention days
 		if (localConfig.log_retention_days < 1) {
-			toast.error(t("configForms.logging.retentionMin"));
+			toast.error(t("logging.toastRetentionMin"));
 			return;
 		}
 
 		try {
 			await updateCoreConfig({ ...bifrostConfig, client_config: localConfig }).unwrap();
-			toast.success(t("configForms.logging.updated"));
+			toast.success(t("logging.toastSaved"));
 		} catch (error) {
 			toast.error(getErrorMessage(error));
 		}
@@ -79,21 +99,18 @@ export default function LoggingView() {
 
 	return (
 		<div className="mx-auto w-full max-w-4xl space-y-4 px-4 py-6 md:px-0">
-			<PageTitle title="Logs Settings">{t("configForms.logging.pageDescription")}</PageTitle>
+			<PageTitle title={t("logging.title")}>{t("logging.description")}</PageTitle>
 
 			<div className="space-y-4">
-				{/* Enable Logs */}
 				<div>
 					<div className="flex items-center justify-between space-x-2 rounded-sm border p-4">
 						<div className="space-y-0.5">
 							<label htmlFor="enable-logging" className="text-sm font-medium">
-								{t("configForms.logging.enableLogging")}
+								{t("logging.enableLogs")}
 							</label>
 							<p className="text-muted-foreground text-sm">
-								{t("configForms.logging.enableLoggingDescription")}
-								{!bifrostConfig?.is_logs_connected && (
-									<span className="text-destructive font-medium"> {t("configForms.logging.requiresLogsStore")}</span>
-								)}
+								{t("logging.enableLogsHelp")}
+								{!bifrostConfig?.is_logs_connected && <span className="text-destructive font-medium"> {t("logging.requiresStore")}</span>}
 							</p>
 						</div>
 						<Switch
@@ -111,15 +128,51 @@ export default function LoggingView() {
 					{needsRestart && <RestartWarning />}
 				</div>
 
+				<div className="min-w-0 space-y-3 rounded-sm border p-4" data-testid="workspace-hidden-request-types">
+					<div className="space-y-0.5">
+						<Label htmlFor="hidden-request-types" className="text-sm font-medium">
+							{t("logging.hiddenRequestTypes")}
+						</Label>
+						<p className="text-muted-foreground text-sm">
+							{t("logging.hiddenRequestTypesHelp")} <code className="text-xs">client.hidden_request_types</code> {t("logging.inConfigJson")}
+						</p>
+					</div>
+					{isConfigError ? (
+						<p className="text-destructive text-sm" role="alert">
+							{t("logging.hiddenRequestTypesLoadError")}
+						</p>
+					) : (
+						<MultiSelect
+							id="hidden-request-types"
+							data-testid="hidden-request-types-select"
+							options={hiddenRequestTypeOptions(localConfig.hidden_request_types || [], tObs)}
+							defaultValue={localConfig.hidden_request_types || []}
+							resetOnDefaultValueChange
+							onValueChange={(values) => handleConfigChange("hidden_request_types", values)}
+							placeholder={isConfigLoading ? t("logging.loadingConfiguration") : t("logging.allRequestTypesVisible")}
+							emptyIndicator={t("logging.noRequestTypes")}
+							disabled={!bifrostConfig || !hasSettingsUpdateAccess}
+							maxCount={6}
+							className="border-input text-foreground hover:bg-accent hover:text-accent-foreground min-h-9 rounded-sm bg-transparent font-normal"
+						/>
+					)}
+				</div>
+
 				{/* Disable Content Logging - Only show when logging is enabled */}
 				{localConfig.enable_logging && bifrostConfig?.is_logs_connected && (
 					<div>
 						<div className="flex items-center justify-between space-x-2 rounded-sm border p-4">
 							<div className="space-y-0.5">
 								<label htmlFor="disable-content-logging" className="text-sm font-medium">
-									{t("configForms.logging.disableContentLogging")}
+									{t("logging.disableContentLogging")}
 								</label>
-								<p className="text-muted-foreground text-sm">{t("configForms.logging.disableContentLoggingDescription")}</p>
+								<p className="text-muted-foreground text-sm">
+									<Trans
+										t={t}
+										i18nKey="logging.disableContentLoggingHelp"
+										components={{ code0: <code className="text-xs" />, code1: <code className="text-xs" /> }}
+									/>
+								</p>
 							</div>
 							<Switch
 								id="disable-content-logging"
@@ -131,17 +184,16 @@ export default function LoggingView() {
 					</div>
 				)}
 
-				{/* Retain Content in Object Storage - Only show when logging is enabled */}
 				{localConfig.enable_logging && bifrostConfig?.is_logs_connected && (
 					<div className="flex items-center justify-between space-x-2 rounded-sm border p-4">
 						<div className="space-y-0.5">
 							<label htmlFor="retain-content-in-object-storage" className="text-sm font-medium">
-								{t("configForms.logging.retainContent")}
+								{t("logging.retainContent")}
 							</label>
 							<p className="text-muted-foreground text-sm">
-								{t("configForms.logging.retainContentDescription")}
+								{t("logging.retainContentHelp")}
 								{!bifrostConfig?.is_object_storage_connected && (
-									<span className="text-destructive font-medium"> {t("configForms.logging.requiresObjectStorage")}</span>
+									<span className="text-destructive font-medium"> {t("logging.requiresObjectStorage")}</span>
 								)}
 							</p>
 						</div>
@@ -160,14 +212,15 @@ export default function LoggingView() {
 					</div>
 				)}
 
-				{/* Allow Per-Request Content Storage Override - Only show when logging is enabled */}
 				{localConfig.enable_logging && bifrostConfig?.is_logs_connected && (
 					<div className="flex items-center justify-between space-x-2 rounded-sm border p-4">
 						<div className="space-y-0.5">
 							<label htmlFor="allow-per-request-content-storage-override" className="text-sm font-medium">
-								{t("configForms.logging.allowContentOverride")}
+								{t("logging.allowContentOverride")}
 							</label>
-							<p className="text-muted-foreground text-sm">{t("configForms.logging.allowContentOverrideDescription")}</p>
+							<p className="text-muted-foreground text-sm">
+								{t("logging.allowContentOverrideHelp", { setting: t("logging.allowRawOverride") })}
+							</p>
 						</div>
 						<Switch
 							id="allow-per-request-content-storage-override"
@@ -183,9 +236,11 @@ export default function LoggingView() {
 				<div className="flex items-center justify-between space-x-2 rounded-sm border p-4">
 					<div className="space-y-0.5">
 						<label htmlFor="allow-per-request-raw-override" className="text-sm font-medium">
-							{t("configForms.logging.allowRawOverride")}
+							{t("logging.allowRawOverride")}
 						</label>
-						<p className="text-muted-foreground text-sm">{t("configForms.logging.allowRawOverrideDescription")}</p>
+						<p className="text-muted-foreground text-sm">
+							{t("logging.allowRawOverrideHelp", { setting: t("logging.allowContentOverride") })}
+						</p>
 					</div>
 					<Switch
 						id="allow-per-request-raw-override"
@@ -196,14 +251,13 @@ export default function LoggingView() {
 					/>
 				</div>
 
-				{/* Log Retention Days */}
 				{localConfig.enable_logging && bifrostConfig?.is_logs_connected && (
 					<div className="flex items-center justify-between space-x-2 rounded-sm border p-4">
 						<div className="space-y-0.5">
 							<Label htmlFor="log-retention-days" className="text-sm font-medium">
-								{t("configForms.logging.retentionDays")}
+								{t("logging.logRetentionDays")}
 							</Label>
-							<p className="text-muted-foreground text-sm">{t("configForms.logging.retentionDaysDescription")}</p>
+							<p className="text-muted-foreground text-sm">{t("logging.logRetentionDaysHelp")}</p>
 						</div>
 						<Input
 							id="log-retention-days"
@@ -222,9 +276,9 @@ export default function LoggingView() {
 				<div className="flex items-center justify-between space-x-2 rounded-sm border p-4">
 					<div className="space-y-0.5">
 						<label htmlFor="hide-deleted-virtual-keys-in-filters" className="text-sm font-medium">
-							{t("configForms.logging.hideDeletedKeys")}
+							{t("logging.hideDeletedVks")}
 						</label>
-						<p className="text-muted-foreground text-sm">{t("configForms.logging.hideDeletedKeysDescription")}</p>
+						<p className="text-muted-foreground text-sm">{t("logging.hideDeletedVksHelp")}</p>
 					</div>
 					<Switch
 						id="hide-deleted-virtual-keys-in-filters"
@@ -235,18 +289,17 @@ export default function LoggingView() {
 					/>
 				</div>
 
-				{/* Logging Headers */}
 				{localConfig.enable_logging && bifrostConfig?.is_logs_connected && (
 					<div className="space-y-2 rounded-sm border p-4">
 						<label htmlFor="logging-headers" className="text-sm font-medium">
-							{t("configForms.logging.loggingHeaders")}
+							{t("logging.loggingHeaders")}
 						</label>
-						<p className="text-muted-foreground text-sm">{t("configForms.logging.loggingHeadersDescription")}</p>
+						<p className="text-muted-foreground text-sm">{t("logging.loggingHeadersHelp")}</p>
 						<Textarea
 							id="logging-headers"
 							data-testid="workspace-logging-headers-textarea"
 							className="h-24"
-							placeholder={t("configForms.logging.loggingHeadersPlaceholder")}
+							placeholder={t("logging.loggingHeadersPlaceholder")}
 							value={loggingHeadersText}
 							onChange={(e) => handleLoggingHeadersChange(e.target.value)}
 						/>
@@ -254,9 +307,9 @@ export default function LoggingView() {
 				)}
 			</div>
 
-			<div className="flex justify-end pt-2">
+			<div className="bg-card sticky bottom-0 flex justify-end py-2">
 				<Button onClick={handleSave} disabled={!hasChanges || isLoading || !hasSettingsUpdateAccess}>
-					{isLoading ? t("common.saving") : t("common.saveChanges")}
+					{isLoading ? t("saving") : t("saveChanges")}
 				</Button>
 			</div>
 		</div>
@@ -264,6 +317,6 @@ export default function LoggingView() {
 }
 
 const RestartWarning = () => {
-	const t = useT();
-	return <div className="text-muted-foreground mt-2 pl-4 text-xs font-semibold">{t("configForms.restartToApply")}</div>;
+	const { t } = useTranslation("config");
+	return <div className="text-muted-foreground mt-2 pl-4 text-xs font-semibold">{t("restartWarning")}</div>;
 };

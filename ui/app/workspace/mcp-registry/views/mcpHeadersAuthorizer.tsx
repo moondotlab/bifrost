@@ -11,10 +11,10 @@
 import HeadersForm from "@/components/headersForm";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { useT } from "@/lib/i18n";
 import { getErrorMessage } from "@/lib/store";
 import { CheckCircle2, KeyRound, Loader2, RefreshCw, ShieldCheck, XCircle } from "lucide-react";
 import React, { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { IconWrap, InfoBox, StepDots, UiVariant } from "./authorizerUi";
 
 interface MCPHeadersAuthorizerProps {
@@ -25,6 +25,9 @@ interface MCPHeadersAuthorizerProps {
 	onConflict?: (error: string) => void;
 	// Required key schema, rendered as the form's input fields.
 	perUserHeaderKeys: string[];
+	// The client has per-caller discovery, so the sample values only verify
+	// it and are not kept.
+	perUserDiscovery?: boolean;
 	// Called with the collected sample values once the admin submits the
 	// form. The handler decides what endpoint to hit (Create flow's
 	// /api/mcp/client vs bootstrap's /api/mcp/client/{id}/verify-headers).
@@ -49,23 +52,11 @@ export const MCPHeadersAuthorizer: React.FC<MCPHeadersAuthorizerProps> = ({
 	onError,
 	onConflict,
 	perUserHeaderKeys,
+	perUserDiscovery,
 	submitHandler,
 }) => {
-	const t = useT();
-	const titles: Record<Status, string> = {
-		confirm: t("mcp.headersAuth.testConfig"),
-		input: t("mcp.headersAuth.enterSample"),
-		testing: t("mcp.headersAuth.verifying"),
-		success: t("mcp.headersAuth.verified"),
-		failed: t("mcp.headersAuth.failed"),
-	};
-	const subtitles: Record<Status, string> = {
-		confirm: t("mcp.headersAuth.confirmSub"),
-		input: t("mcp.headersAuth.inputSub"),
-		testing: t("mcp.headersAuth.testingSub"),
-		success: t("mcp.headersAuth.successSub"),
-		failed: t("mcp.headersAuth.failedSub"),
-	};
+	const { t } = useTranslation("mcp");
+	const { t: tc } = useTranslation("common");
 	const [status, setStatus] = useState<Status>("confirm");
 	const [errorMessage, setErrorMessage] = useState<string | null>(null);
 	// Set to true when the user cancels so in-flight async callbacks do not
@@ -119,6 +110,21 @@ export const MCPHeadersAuthorizer: React.FC<MCPHeadersAuthorizerProps> = ({
 		onClose();
 	};
 
+	const titles: Record<Status, string> = {
+		confirm: t("registry.authorizer.headers.testConfig"),
+		input: t("registry.authorizer.headers.enterSample"),
+		testing: t("registry.authorizer.headers.verifying"),
+		success: t("registry.authorizer.headers.verified"),
+		failed: t("registry.toast.verificationFailed"),
+	};
+	const subtitles: Record<Status, string> = {
+		confirm: t("registry.authorizer.headers.confirmSubtitle"),
+		input: t("registry.authorizer.headers.inputSubtitle"),
+		testing: t("registry.authorizer.headers.testingSubtitle"),
+		success: t("registry.authorizer.headers.successSubtitle"),
+		failed: t("registry.authorizer.headers.failedSubtitle"),
+	};
+
 	return (
 		<Dialog
 			open={open}
@@ -154,12 +160,16 @@ export const MCPHeadersAuthorizer: React.FC<MCPHeadersAuthorizerProps> = ({
 					{status === "confirm" && (
 						<>
 							<InfoBox icon={<KeyRound className="size-4" />}>
-								<p>{t("mcp.headersAuth.confirmBody")}</p>
-								<p className="text-muted-foreground/80 text-xs">{t("mcp.headersAuth.confirmNote")}</p>
+								<p>{t("registry.authorizer.headers.confirmBody")}</p>
+								<p className="text-muted-foreground/80 text-xs">
+									{perUserDiscovery
+										? t("registry.authorizer.headers.confirmHintPerUserDiscovery")
+										: t("registry.authorizer.headers.confirmHint")}
+								</p>
 							</InfoBox>
 							<div className="flex justify-end gap-2">
 								<Button size="sm" variant="outline" onClick={handleCancel} data-testid="per-user-headers-cancel">
-									{t("common.cancel")}
+									{tc("cancel")}
 								</Button>
 								<Button size="sm" onClick={handleConfirm} data-testid="per-user-headers-confirm">
 									{t("common.continue")}
@@ -172,12 +182,16 @@ export const MCPHeadersAuthorizer: React.FC<MCPHeadersAuthorizerProps> = ({
 					{status === "input" && (
 						<>
 							<InfoBox icon={<KeyRound className="size-4" />}>
-								<p>{t("mcp.headersAuth.inputBody")}</p>
+								<p>
+									{perUserDiscovery
+										? t("registry.authorizer.headers.inputBodyPerUserDiscovery")
+										: t("registry.authorizer.headers.inputBody")}
+								</p>
 							</InfoBox>
 							<HeadersForm
 								requiredKeys={perUserHeaderKeys}
 								onSubmit={handleRunTest}
-								submitLabel={t("mcp.headersAuth.runTest")}
+								submitLabel={t("registry.authorizer.headers.runTest")}
 								onCancel={handleCancel}
 								testIdPrefix="per-user-headers-admin-test"
 							/>
@@ -188,8 +202,8 @@ export const MCPHeadersAuthorizer: React.FC<MCPHeadersAuthorizerProps> = ({
 					{status === "testing" && (
 						<>
 							<InfoBox icon={<Loader2 className="size-4 animate-spin" />}>
-								<p>{t("mcp.headersAuth.testingBody")}</p>
-								<p className="text-muted-foreground/80 text-xs">{t("mcp.headersAuth.testingHint")}</p>
+								<p>{t("registry.authorizer.headers.testingBody")}</p>
+								<p className="text-muted-foreground/80 text-xs">{t("registry.authorizer.headers.takesAMoment")}</p>
 							</InfoBox>
 							<div className="flex items-center justify-end">
 								<StepDots active={2} total={3} />
@@ -200,8 +214,8 @@ export const MCPHeadersAuthorizer: React.FC<MCPHeadersAuthorizerProps> = ({
 					{/* Success */}
 					{status === "success" && (
 						<InfoBox variant="success" icon={<CheckCircle2 className="size-4" />}>
-							<p className="font-medium">{t("mcp.headersAuth.successBody")}</p>
-							<p className="text-xs opacity-80">{t("mcp.headersAuth.successHint")}</p>
+							<p className="font-medium">{t("registry.authorizer.headers.verifiedBody")}</p>
+							<p className="text-xs opacity-80">{t("registry.authorizer.headers.closeDialog")}</p>
 						</InfoBox>
 					)}
 
@@ -209,12 +223,12 @@ export const MCPHeadersAuthorizer: React.FC<MCPHeadersAuthorizerProps> = ({
 					{status === "failed" && (
 						<>
 							<InfoBox variant="danger" icon={<XCircle className="size-4" />}>
-								<p className="font-medium">{t("mcp.headersAuth.failedBody")}</p>
-								<p className="text-xs opacity-80">{errorMessage ?? t("mcp.headersAuth.failedFallback")}</p>
+								<p className="font-medium">{t("registry.authorizer.headers.didNotComplete")}</p>
+								<p className="text-xs opacity-80">{errorMessage ?? t("registry.authorizer.headers.checkValues")}</p>
 							</InfoBox>
 							<div className="flex justify-end gap-2">
 								<Button size="sm" variant="outline" onClick={handleCancel} data-testid="mcp-headers-authorizer-close-btn">
-									{t("common.close")}
+									{tc("close")}
 								</Button>
 								<Button size="sm" onClick={handleRetry} data-testid="mcp-headers-authorizer-retry-btn">
 									<RefreshCw className="size-3.5" />

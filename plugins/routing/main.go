@@ -12,13 +12,13 @@ package routing
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 	"sync/atomic"
 
 	bifrost "github.com/maximhq/bifrost/core"
 	"github.com/maximhq/bifrost/core/schemas"
 	"github.com/maximhq/bifrost/framework/configstore"
+	configstoreTables "github.com/maximhq/bifrost/framework/configstore/tables"
 	"github.com/maximhq/bifrost/framework/vectorstore"
 	"github.com/maximhq/bifrost/plugins/routing/complexity"
 	"github.com/maximhq/bifrost/plugins/routing/rules"
@@ -73,10 +73,25 @@ type RoutingPlugin struct {
 	rules              rules.Store
 	engine             *rules.Engine
 	complexityAnalyzer atomic.Pointer[complexity.ComplexityAnalyzer]
+	complexityConfig   atomic.Pointer[complexity.AnalyzerConfig]
 	semanticClassifier *complexity.SemanticClassifier
 	llmClassifier      *complexity.LLMClassifier
 	sessionStore       *complexitySessionStore
+	turnTierStore      *complexityTurnTierStore
 	sessionEnabled     atomic.Bool
+	// capture samples classified requests' vectors for phrase suggestions;
+	// see complexitycapture.go.
+	capture *complexityCapture
+	// suggestions runs phrase suggestions on their schedule; see
+	// complexitysuggestions.go.
+	suggestions *complexitySuggestions
+
+	routers         atomic.Pointer[map[string]*modelRouterRuntime] // model routers by id, replaced whole under routersMu; see modelrouters.go
+	routersMu       sync.Mutex
+	routerMatcher   *rules.ModelRouterMatcher // enabled routers' routing; picks the one that takes a request
+	runtimeCtx      context.Context           // with warmCoordinator and dimensionStore: what routers built later reuse
+	warmCoordinator complexity.WarmCoordinator
+	dimensionStore  complexity.EmbeddingDimensionStore
 
 	// governance supplies the virtual key, its live budget/rate-limit usage, and the provider
 	// materialization that runs once rules have decided. Required: rules address budgets and
@@ -111,6 +126,7 @@ type RoutingPlugin struct {
 	// a chat completion is rejected because the judge model requires
 	// /v1/responses; it stays nil until wired, in which case no fallback runs.
 	responsesRequestExecutor atomic.Pointer[ResponsesRequestExecutor]
+	decisionRequestExecutor  atomic.Pointer[DecisionRequestExecutor]
 }
 
 // Init initializes and returns a routing plugin instance.
@@ -172,9 +188,11 @@ func InitFromStore(
 		logger:             logger,
 		semanticClassifier: complexity.NewSemanticClassifier(ctx, logger),
 		llmClassifier:      complexity.NewLLMClassifier(logger),
+		runtimeCtx:         ctx,
 	}
 	if config != nil && config.KVStore != nil {
 		plugin.sessionStore = newComplexitySessionStore(config.KVStore, complexitySessionInactivityTTL)
+		plugin.turnTierStore = &complexityTurnTierStore{store: config.KVStore}
 		// Peers sharing a vector store otherwise embed the same phrases against
 		// the same namespace at the same time, because a configuration change
 		// reaches every node at once and the marker that would let a late node
@@ -182,6 +200,7 @@ func InitFromStore(
 		// node warms independently, exactly as before.
 		if coordinator := newKVComplexityWarmCoordinator(config.KVStore, newRoutingNodeID()); coordinator != nil {
 			plugin.semanticClassifier.SetWarmCoordinator(coordinator)
+			plugin.warmCoordinator = coordinator
 		}
 	}
 	// Remembering the measured embedding width is what lets a restart adopt an
@@ -191,6 +210,7 @@ func InitFromStore(
 	// to ask.
 	if dimensions := newPersistentEmbeddingDimensionStore(ctx, configStore, logger); dimensions != nil {
 		plugin.semanticClassifier.SetEmbeddingDimensionStore(dimensions)
+		plugin.dimensionStore = dimensions
 	}
 	// Retired generations are reclaimed in the background. A node-local store
 	// drops its own immediately, but on a shared one a peer may still be serving
@@ -211,6 +231,11 @@ func InitFromStore(
 		}()
 	}
 
+	// Before the first config is stored, so the suggestions block it carries
+	// turns capture on.
+	plugin.startComplexityCapture(ctx, captureUpkeepInterval, captureUpkeepFirstDelay)
+	plugin.startComplexitySuggestions(ctx, suggestionScheduleTick)
+
 	var analyzerOverride *complexity.AnalyzerConfig
 	if config != nil {
 		analyzerOverride = config.ComplexityAnalyzerConfig
@@ -219,6 +244,13 @@ func InitFromStore(
 		_ = plugin.Cleanup()
 		return nil, err
 	}
+	routerMatcher, err := rules.NewModelRouterMatcher()
+	if err != nil {
+		_ = plugin.Cleanup()
+		return nil, fmt.Errorf("failed to initialize model router matching: %w", err)
+	}
+	plugin.routerMatcher = routerMatcher
+	plugin.loadModelRouters(ctx, configStore)
 	return plugin, nil
 }
 
@@ -237,26 +269,25 @@ func (p *RoutingPlugin) ReloadComplexityAnalyzerConfig(config *complexity.Analyz
 	return p.storeComplexityAnalyzerConfig(config)
 }
 
+// storeComplexityAnalyzerConfig validates and installs the runtime classifier configuration:
+// the Complexity Router page's config, which routing rules read complexity_tier from.
+// Model routers are configured apart from it; see ReloadModelRouter.
+//
+// The config makes no phrase suggestions: those are a model router's. A
+// suggestions block stored before they moved to routers is dropped here, so
+// an incomplete one cannot fail validation and send the config to defaults.
 func (p *RoutingPlugin) storeComplexityAnalyzerConfig(config *complexity.AnalyzerConfig) error {
-	resolved, err := complexity.ValidateAndNormalize(config)
-	if err != nil {
-		if p.logger != nil {
-			p.logger.Warn("invalid complexity analyzer config, using defaults: %v", err)
-		}
-		defaults := complexity.DefaultAnalyzerConfig()
-		resolved = &defaults
+	if config != nil && config.Suggestions != nil {
+		withoutSuggestions := *config
+		withoutSuggestions.Suggestions = nil
+		config = &withoutSuggestions
 	}
-	if resolved.SessionRoutingEnabled() && p.sessionStore == nil {
-		return fmt.Errorf("complexity session routing requires a KV store")
+	resolved, err := p.resolveRouterConfig(config)
+	if err != nil {
+		return err
 	}
 	p.complexityAnalyzer.Store(complexity.NewComplexityAnalyzerWithConfig(resolved))
-	p.sessionEnabled.Store(resolved.SessionRoutingEnabled())
-	if p.semanticClassifier != nil {
-		p.semanticClassifier.Configure(resolved)
-	}
-	if p.llmClassifier != nil {
-		p.llmClassifier.Configure(resolved)
-	}
+	applyRouterConfig(p.complexityRuntime(), resolved)
 	return nil
 }
 
@@ -275,6 +306,7 @@ func (p *RoutingPlugin) RearmComplexitySemanticClassifier(provider schemas.Model
 	if p.semanticClassifier != nil {
 		p.semanticClassifier.RearmForProvider(provider)
 	}
+	p.forEachModelRouter(func(rt *modelRouterRuntime) { rt.semantic.RearmForProvider(provider) })
 }
 
 // ValidateComplexityAnalyzerConfig runs the semantic classifier's own
@@ -284,20 +316,28 @@ func (p *RoutingPlugin) RearmComplexitySemanticClassifier(provider schemas.Model
 // executor that will apply it. Keyword-only configuration remains valid without
 // either dependency.
 func (p *RoutingPlugin) ValidateComplexityAnalyzerConfig(config *complexity.AnalyzerConfig) error {
-	if config != nil && config.Semantic != nil && p.semanticClassifier == nil {
-		return fmt.Errorf("semantic complexity classifier is unavailable")
-	}
-	if config != nil && config.Semantic != nil && p.embeddingExecutor() == nil {
-		return fmt.Errorf("semantic complexity embedding executor is unavailable")
-	}
-	if p.semanticClassifier != nil {
-		if err := p.semanticClassifier.ValidateConfig(config); err != nil {
-			return err
-		}
-	}
 	resolved, err := complexity.ValidateAndNormalize(config)
 	if err != nil {
 		return err
+	}
+	usesSemantic := resolved.Classifier == complexity.ClassifierSemantic
+	if usesSemantic && resolved.Semantic != nil && p.semanticClassifier == nil {
+		return fmt.Errorf("semantic complexity classifier is unavailable")
+	}
+	if usesSemantic && resolved.Semantic != nil && p.embeddingExecutor() == nil {
+		return fmt.Errorf("semantic complexity embedding executor is unavailable")
+	}
+	if usesSemantic && p.semanticClassifier != nil {
+		if err := p.semanticClassifier.ValidateConfig(resolved); err != nil {
+			return err
+		}
+	}
+	usesDecision := resolved.Classifier == complexity.ClassifierDecision || (resolved.Semantic != nil && resolved.Semantic.Fallback == configstore.ComplexitySemanticFallbackDecision)
+	if usesDecision && p.decisionExecutor() == nil {
+		return fmt.Errorf("decision-model executor is unavailable")
+	}
+	if resolved.Classifier == complexity.ClassifierLLM && p.chatExecutor() == nil {
+		return fmt.Errorf("llm complexity classifier executor is unavailable")
 	}
 	if resolved.SessionRoutingEnabled() && p.sessionStore == nil {
 		return fmt.Errorf("complexity session routing requires a KV store")
@@ -322,13 +362,44 @@ func (p *RoutingPlugin) RetryComplexitySemanticWarmup() (complexity.SemanticStat
 	return p.semanticClassifier.RetryWarmup()
 }
 
-// ListComplexityGenerations reports the exemplar generations held in the vector
-// store, flagging the one currently serving.
+// ListComplexityGenerations reports the exemplar generations held in the
+// vector stores of every model router, flagging each one some router serves.
+// Routers with identical settings share a generation, so a namespace is
+// listed once and is active if any router serves it.
 func (p *RoutingPlugin) ListComplexityGenerations(ctx context.Context) ([]complexity.GenerationInfo, error) {
 	if p.semanticClassifier == nil {
 		return []complexity.GenerationInfo{}, nil
 	}
-	return p.semanticClassifier.ListGenerations(ctx)
+	generations, err := p.semanticClassifier.ListGenerations(ctx)
+	if err != nil {
+		return nil, err
+	}
+	routers := p.modelRouters()
+	if len(routers) == 0 {
+		return generations, nil
+	}
+	index := make(map[string]int, len(generations))
+	for i, generation := range generations {
+		index[generation.Namespace] = i
+	}
+	for _, rt := range routers {
+		if rt.semantic == nil {
+			continue
+		}
+		listed, err := rt.semantic.ListGenerations(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, generation := range listed {
+			if i, seen := index[generation.Namespace]; seen {
+				generations[i].Active = generations[i].Active || generation.Active
+				continue
+			}
+			index[generation.Namespace] = len(generations)
+			generations = append(generations, generation)
+		}
+	}
+	return generations, nil
 }
 
 // DeleteComplexityGeneration removes one retired exemplar generation.
@@ -363,11 +434,46 @@ func (p *RoutingPlugin) DeleteComplexityGeneration(ctx context.Context, namespac
 // there would block on a lease this node already owns, and every reclamation
 // would fail. The classifier's own guards — the serving generation, in-flight
 // requests, a warm in progress — still apply.
+//
+// With several model routers, a generation one router serves is refused even
+// when the router asked holds it retired, and each router whose store holds it
+// deletes it: a shared vector store holds every router's, an embedded one only
+// its own router's.
 func (p *RoutingPlugin) deleteComplexityGenerationUnchecked(ctx context.Context, namespace string) error {
 	if p.semanticClassifier == nil {
 		return complexity.ErrClassifierUnavailable
 	}
-	return p.semanticClassifier.DeleteGeneration(ctx, namespace)
+	if len(p.modelRouters()) == 0 {
+		return p.semanticClassifier.DeleteGeneration(ctx, namespace)
+	}
+	var holders []*complexity.SemanticClassifier
+	for _, rt := range p.allClassifiers() {
+		if rt.semantic == nil {
+			continue
+		}
+		listed, err := rt.semantic.ListGenerations(ctx)
+		if err != nil {
+			return err
+		}
+		for _, generation := range listed {
+			if generation.Namespace != namespace {
+				continue
+			}
+			if generation.Active {
+				return complexity.ErrGenerationActive
+			}
+			holders = append(holders, rt.semantic)
+		}
+	}
+	if len(holders) == 0 {
+		return p.semanticClassifier.DeleteGeneration(ctx, namespace)
+	}
+	for _, holder := range holders {
+		if err := holder.DeleteGeneration(ctx, namespace); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // PreRequestHook evaluates routing rules, then materializes the virtual key's provider choice
@@ -409,16 +515,30 @@ func (p *RoutingPlugin) PreRequestHook(ctx *schemas.BifrostContext, req *schemas
 		return nil
 	}
 
-	if _, err := p.applyRoutingRules(ctx, req, scope); err != nil {
+	decision, err := p.applyRoutingRules(ctx, req, scope)
+	if err != nil {
 		return err
 	}
+	// Model routers run after the routing rules and before the virtual key's
+	// allowlist and load balancing, which must see the model they choose.
+	chainFromRouter := p.applyModelRouters(ctx, req, scope)
 
-	_, routedModel, _ := req.GetRequestFields()
+	_, routedModel, routedFallbacks := req.GetRequestFields()
+	// Here and not in applyRoutingRules: the large-payload path routes a synthetic request and
+	// attaches none of its fallbacks, so only this path carries a chain governance can refuse.
+	// The chain is the model router's when its target replaced it, and the rule's otherwise.
+	switch {
+	case chainFromRouter != "":
+		p.warnFallbacksOutsideAccess(ctx, schemas.RoutingEngineModelRouter, "Model router", chainFromRouter, routedFallbacks)
+	case decision != nil && len(decision.Fallbacks) > 0:
+		p.warnFallbacksOutsideAccess(ctx, schemas.RoutingEngineRoutingRule, "Rule", decision.MatchedRuleName, routedFallbacks)
+	}
 
-	// Downstream routing layers (load balancing, model-catalog resolution) and core
-	// enforcement intersect their candidates with this allowlist, so a later layer cannot
-	// select a provider the request may not use for the routed model. A request that carries no
-	// grants at all has nothing to allow or deny, and the call is a no-op.
+	// Downstream routing layers (load balancing, model-catalog resolution) intersect their
+	// candidates with this allowlist, so a later layer does not select a provider the request may
+	// not use for the routed model. Core never reads it: governance's PreLLMHook refuses a
+	// disallowed provider or model on every routed LLM attempt. A request with no grant, or with no
+	// permits, has nothing to allow or deny, and publishing is a no-op.
 	p.governance.PublishRoutingAllowlist(ctx, routedModel)
 	return p.governance.LoadBalanceProvider(ctx, req)
 }
@@ -478,11 +598,11 @@ func (p *RoutingPlugin) applyRoutingRules(ctx *schemas.BifrostContext, req *sche
 	headers, _ := ctx.Value(schemas.BifrostContextKeyRequestHeaders).(map[string]string)
 	queryParams, _ := ctx.Value(schemas.BifrostContextKeyRequestQuery).(map[string]string)
 
-	// Set up lazy complexity computation; only runs if a rule references complexity_tier.
+	// Set up lazy complexity computation; only runs if a rule's outcome depends on complexity_tier.
 	var computeComplexity func() *complexity.ComplexityResult
 	if p.complexityAnalyzer.Load() != nil {
 		computeComplexity = func() *complexity.ComplexityResult {
-			return p.computeComplexity(ctx, req, scope.VirtualKeyID)
+			return p.computeComplexity(ctx, req)
 		}
 	}
 
@@ -524,23 +644,7 @@ func (p *RoutingPlugin) applyRoutingRules(ctx *schemas.BifrostContext, req *sche
 
 	// Add fallbacks if present; fill in the incoming model for fallbacks that omit it
 	if len(decision.Fallbacks) > 0 {
-		resolvedFallbacks := make([]schemas.Fallback, 0, len(decision.Fallbacks))
-		for _, fb := range decision.Fallbacks {
-			fbProvider, fbModel := schemas.ParseModelString(fb, "")
-			trimmedFbProvider := strings.TrimSpace(string(fbProvider))
-			trimmedFbModel := strings.TrimSpace(fbModel)
-			if trimmedFbProvider == "" {
-				continue
-			}
-			if trimmedFbModel == "" && model != "" {
-				trimmedFbModel = model
-			}
-			resolvedFallbacks = append(resolvedFallbacks, schemas.Fallback{
-				Provider: schemas.ModelProvider(trimmedFbProvider),
-				Model:    trimmedFbModel,
-			})
-		}
-		req.SetFallbacks(resolvedFallbacks)
+		req.SetFallbacks(resolveRuleFallbacks(ctx, schemas.RoutingEngineRoutingRule, "Rule '"+decision.MatchedRuleName+"'", decision.Fallbacks, model))
 	}
 
 	// Pin specific API key by ID if the routing rule specifies one. This uses a dedicated,
@@ -552,7 +656,13 @@ func (p *RoutingPlugin) applyRoutingRules(ctx *schemas.BifrostContext, req *sche
 		ctx.SetValue(schemas.BifrostContextKeyRoutingPinnedAPIKeyID, decision.KeyID)
 	}
 
-	p.logger.Debug("[Routing] Applied routing decision: provider=%s, model=%s, keyID=%s, fallbacks=%v", decision.Provider, decision.Model, decision.KeyID, decision.Fallbacks)
+	// TTFT deadline for streaming requests. Core applies it to every attempt but
+	// the last, so it only takes effect when this request has fallbacks.
+	if decision.TTFTTimeout > 0 && bifrost.IsStreamRequestType(req.RequestType) {
+		ctx.SetValue(schemas.BifrostContextKeyStreamFirstTokenTimeout, decision.TTFTTimeout)
+	}
+
+	p.logger.Debug("[Routing] Applied routing decision: provider=%s, model=%s, keyID=%s, fallbacks=%v", decision.Provider, decision.Model, decision.KeyID, configstoreTables.RoutingFallbackStrings(decision.Fallbacks))
 	return decision, nil
 }
 
@@ -567,11 +677,39 @@ func (p *RoutingPlugin) PreLLMHook(_ *schemas.BifrostContext, req *schemas.Bifro
 // every later post-hook consumer.
 func (p *RoutingPlugin) PostLLMHook(ctx *schemas.BifrostContext, resp *schemas.BifrostResponse, bifrostErr *schemas.BifrostError) (*schemas.BifrostResponse, *schemas.BifrostError, error) {
 	if ctx != nil && resp != nil {
+		final := false
 		if extraFields := resp.GetExtraFields(); extraFields != nil {
-			stampRoutingMetadata(ctx, resp, extraFields.RequestType, bifrost.IsFinalChunk(ctx))
+			final = !bifrost.IsStreamRequestType(extraFields.RequestType) || bifrost.IsFinalChunk(ctx)
+			stampRoutingMetadata(ctx, resp, extraFields.RequestType, final)
+		}
+		if bifrostErr == nil && final {
+			p.persistComplexityTurnTier(ctx)
 		}
 	}
 	return resp, bifrostErr, nil
+}
+
+// persistComplexityTurnTier refreshes session tier state only after a served turn.
+func (p *RoutingPlugin) persistComplexityTurnTier(ctx *schemas.BifrostContext) {
+	if p.turnTierStore == nil || ctx == nil {
+		return
+	}
+	sessionID, _ := ctx.Value(schemas.BifrostContextKeySessionID).(string)
+	if sessionID == "" {
+		return
+	}
+	// One request can be classified for a routing rule's complexity_tier and
+	// by the model router that takes it. Each keeps its own tier, so a
+	// continuation resumes each on the tier it gave this turn.
+	tiers, _ := ctx.Value(modelRouterTiersKey{}).(map[string]routerTier)
+	for routerID, entry := range tiers {
+		if entry.result == nil || entry.result.Tier == "" {
+			continue
+		}
+		if err := p.turnTierStore.save(complexityTurnTierKeyFor(ctx, routerID), entry.result.Tier, complexityTurnTierTTL(ctx)); err != nil {
+			p.logComplexitySessionStoreError("persist continuation tier", err)
+		}
+	}
 }
 
 // Cleanup implements schemas.BasePlugin.
@@ -581,6 +719,12 @@ func (p *RoutingPlugin) Cleanup() error {
 			p.generationsCancel()
 			p.generationsWg.Wait()
 		}
+		// A run this node is doing itself holds the classifier's serving
+		// space, and capture's writer may still be writing to a store the
+		// classifier owns: both stop before the classifier does.
+		p.closeComplexitySuggestions()
+		p.closeComplexityCapture()
+		p.closeModelRouters()
 		if p.semanticClassifier != nil {
 			if err := p.semanticClassifier.Close(); err != nil {
 				p.logger.Warn("[Routing] failed to close semantic classifier: %v", err)

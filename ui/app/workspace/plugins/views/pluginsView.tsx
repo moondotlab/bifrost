@@ -7,12 +7,12 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { setPluginFormDirtyState, useAppDispatch, useAppSelector, useUpdatePluginMutation } from "@/lib/store";
 import { PluginType } from "@/lib/types/plugins";
-import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { RbacOperation, RbacResource, useRbac } from "@enterprise/lib";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { PlusIcon, SaveIcon, Trash2Icon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import * as z from "zod";
@@ -44,18 +44,8 @@ const getPluginTypeColor = (type: PluginType) => {
 };
 
 export default function PluginsView(props: Props) {
-	const t = useT();
-	const pluginFormSchema = useMemo(
-		() =>
-			z.object({
-				name: z.string().min(1, t("routing.plugins.nameRequiredShort")),
-				enabled: z.boolean(),
-				path: z.string().optional(),
-				config: z.string().optional(),
-				hasConfig: z.boolean(),
-			}),
-		[t],
-	);
+	const { t } = useTranslation("governance");
+	const { t: tCommon } = useTranslation("common");
 	const dispatch = useAppDispatch();
 	const hasUpdatePluginAccess = useRbac(RbacResource.Plugins, RbacOperation.Update);
 	const hasDeletePluginAccess = useRbac(RbacResource.Plugins, RbacOperation.Delete);
@@ -63,6 +53,18 @@ export default function PluginsView(props: Props) {
 	const selectedPlugin = useAppSelector((state) => state.plugin.selectedPlugin);
 	const [showConfig, setShowConfig] = useState(false);
 	const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+
+	const pluginFormSchema = useMemo(
+		() =>
+			z.object({
+				name: z.string().min(1, t("plugins.nameRequired")),
+				enabled: z.boolean(),
+				path: z.string().optional(),
+				config: z.string().optional(),
+				hasConfig: z.boolean(),
+			}),
+		[t],
+	);
 
 	const form = useForm<PluginFormValues>({
 		resolver: zodResolver(pluginFormSchema),
@@ -105,7 +107,7 @@ export default function PluginsView(props: Props) {
 				try {
 					config = JSON.parse(values.config);
 				} catch {
-					toast.error(t("routing.plugins.invalidJsonConfig"));
+					toast.error(t("plugins.invalidJson"));
 					return;
 				}
 			}
@@ -118,15 +120,15 @@ export default function PluginsView(props: Props) {
 					...(config !== undefined && { config }),
 				},
 			}).unwrap();
-			toast.success(t("routing.plugins.updated"));
+			toast.success(t("plugins.updated"));
 			form.reset(values);
 		} catch {
-			toast.error(t("routing.plugins.updateFailed"));
+			toast.error(t("plugins.updateFailed"));
 		}
 	};
 
 	const onError = () => {
-		toast.error(t("routing.plugins.fixFormErrors"));
+		toast.error(t("plugins.formErrors"));
 	};
 
 	const handleDeleteClick = () => {
@@ -139,14 +141,14 @@ export default function PluginsView(props: Props) {
 
 	const handleDeleteSuccess = () => {
 		setShowDeleteDialog(false);
-		toast.success(t("routing.plugins.deleted"));
+		toast.success(t("plugins.deleted"));
 		props.onDelete();
 	};
 
 	if (!selectedPlugin) {
 		return (
 			<div className="ml-4 flex w-full items-center justify-center">
-				<p className="text-muted-foreground">{t("routing.plugins.noPluginSelected")}</p>
+				<p className="text-muted-foreground">{t("plugins.noPluginSelected")}</p>
 			</div>
 		);
 	}
@@ -161,24 +163,18 @@ export default function PluginsView(props: Props) {
 			<Form {...form}>
 				<form onSubmit={form.handleSubmit(onSubmit, onError)} className="space-y-6">
 					<div className="">
-						<h3 className="mb-4 text-lg font-semibold">{t("routing.plugins.configuration")}</h3>
+						<h3 className="mb-4 text-lg font-semibold">{t("plugins.configuration")}</h3>
 						<div className="space-y-6">
 							<FormField
 								control={form.control}
 								name="name"
 								render={({ field }) => (
 									<FormItem>
-										<FormLabel>{t("common.name")}</FormLabel>
+										<FormLabel>{t("plugins.name")}</FormLabel>
 										<FormControl>
-											<Input
-												placeholder={t("routing.plugins.pluginNamePlaceholder")}
-												{...field}
-												readOnly
-												disabled
-												className="cursor-not-allowed"
-											/>
+											<Input placeholder={t("plugins.nameLabel")} {...field} readOnly disabled className="cursor-not-allowed" />
 										</FormControl>
-										<FormDescription>{t("routing.plugins.nameDesc")}</FormDescription>
+										<FormDescription>{t("plugins.nameHelp")}</FormDescription>
 										<FormMessage />
 									</FormItem>
 								)}
@@ -186,7 +182,7 @@ export default function PluginsView(props: Props) {
 
 							{selectedPlugin.status?.types && selectedPlugin.status.types.length > 0 && (
 								<FormItem>
-									<FormLabel>{t("routing.plugins.types")}</FormLabel>
+									<FormLabel>{t("plugins.types")}</FormLabel>
 									<FormControl>
 										<div className="flex flex-wrap gap-1">
 											{selectedPlugin.status.types.map((type) => (
@@ -209,8 +205,8 @@ export default function PluginsView(props: Props) {
 								render={({ field }) => (
 									<FormItem className="flex flex-row items-center justify-between">
 										<div className="space-y-0.5">
-											<FormLabel>{t("common.enabled")}</FormLabel>
-											<FormDescription>{t("routing.plugins.enableDesc")}</FormDescription>
+											<FormLabel>{t("plugins.enabled")}</FormLabel>
+											<FormDescription>{t("plugins.enabledHelp")}</FormDescription>
 										</div>
 										<FormControl>
 											<Switch checked={field.value} onCheckedChange={field.onChange} />
@@ -224,11 +220,11 @@ export default function PluginsView(props: Props) {
 								name="path"
 								render={({ field }) => (
 									<FormItem>
-										<FormLabel>{t("routing.plugins.path")}</FormLabel>
+										<FormLabel>{t("plugins.path")}</FormLabel>
 										<FormControl>
-											<Input placeholder={t("routing.plugins.pathPlaceholder")} {...field} value={field.value || ""} />
+											<Input placeholder={t("plugins.pathLabel")} {...field} value={field.value || ""} />
 										</FormControl>
-										<FormDescription>{t("routing.plugins.pathDesc")}</FormDescription>
+										<FormDescription>{t("plugins.pathHelp")}</FormDescription>
 										<FormMessage />
 									</FormItem>
 								)}
@@ -249,7 +245,7 @@ export default function PluginsView(props: Props) {
 									className="w-full"
 								>
 									<PlusIcon className="mr-2 h-4 w-4" />
-									{t("routing.plugins.addConfiguration")}
+									{t("plugins.addConfiguration")}
 								</Button>
 							) : (
 								<FormField
@@ -258,7 +254,7 @@ export default function PluginsView(props: Props) {
 									render={({ field }) => (
 										<FormItem>
 											<div className="flex items-center justify-between">
-												<FormLabel>{t("routing.plugins.configJson")}</FormLabel>
+												<FormLabel>{t("plugins.configJson")}</FormLabel>
 												<Button
 													type="button"
 													variant="ghost"
@@ -270,7 +266,7 @@ export default function PluginsView(props: Props) {
 													}}
 													className="h-auto p-1 text-xs"
 												>
-													{t("common.remove")}
+													{t("plugins.remove")}
 												</Button>
 											</div>
 											<FormControl>
@@ -292,7 +288,7 @@ export default function PluginsView(props: Props) {
 													/>
 												</div>
 											</FormControl>
-											<FormDescription>{t("routing.plugins.configDesc")}</FormDescription>
+											<FormDescription>{t("plugins.configJsonHelp")}</FormDescription>
 											<FormMessage />
 										</FormItem>
 									)}
@@ -305,7 +301,7 @@ export default function PluginsView(props: Props) {
 								<div className="space-y-4">
 									{selectedPlugin.status?.logs && selectedPlugin.status.logs.length > 0 && (
 										<div className="grid gap-2">
-											<label className="text-sm font-medium">{t("routing.plugins.logs")}</label>
+											<span className="text-sm font-medium">{t("plugins.logs")}</span>
 											<div className="rounded-md border px-4 py-2 font-mono text-xs">
 												<div className="flex flex-row items-center gap-2">
 													{selectedPlugin.status.logs.map((log, index) => (
@@ -331,7 +327,7 @@ export default function PluginsView(props: Props) {
 							disabled={!hasDeletePluginAccess}
 						>
 							<Trash2Icon className="h-4 w-4" />
-							{t("routing.plugins.delete")}
+							{t("plugins.deletePlugin")}
 						</Button>
 						<Button
 							type="button"
@@ -339,11 +335,11 @@ export default function PluginsView(props: Props) {
 							onClick={() => form.reset()}
 							disabled={!form.formState.isDirty || !hasUpdatePluginAccess}
 						>
-							{t("common.reset")}
+							{t("plugins.reset")}
 						</Button>
 						<Button type="submit" disabled={isLoading || !form.formState.isDirty || !hasUpdatePluginAccess}>
 							<SaveIcon className="h-4 w-4" />
-							{isLoading ? t("common.saving") : t("common.saveChanges")}
+							{isLoading ? t("plugins.saving") : t("plugins.saveChanges")}
 						</Button>
 					</div>
 				</form>

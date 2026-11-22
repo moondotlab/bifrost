@@ -1,11 +1,11 @@
 import { Command as CommandPrimitive } from "cmdk";
-import { CheckIcon, ChevronDownIcon, XIcon } from "lucide-react";
+import { CheckIcon, ChevronDownIcon, Loader2Icon, SearchIcon, XIcon } from "lucide-react";
 import * as React from "react";
+import { useTranslation } from "react-i18next";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 interface ComboboxContextValue {
@@ -39,6 +39,8 @@ interface ComboboxRootProps {
 	itemToStringLabel?: (value: string | null) => string;
 	open?: boolean;
 	defaultOpen?: boolean;
+	/** Controls the search text, so a consumer can reset it (e.g. on close). */
+	inputValue?: string;
 }
 
 function Combobox({
@@ -52,11 +54,13 @@ function Combobox({
 	itemToStringLabel,
 	open: controlledOpen,
 	defaultOpen = false,
+	inputValue: controlledInputValue,
 }: ComboboxRootProps) {
 	const [internalOpen, setInternalOpen] = React.useState(defaultOpen);
-	const [inputValue, setInputValueState] = React.useState("");
+	const [internalInputValue, setInputValueState] = React.useState("");
 
 	const open = controlledOpen !== undefined ? controlledOpen : internalOpen;
+	const inputValue = controlledInputValue !== undefined ? controlledInputValue : internalInputValue;
 
 	const setOpen = React.useCallback(
 		(v: boolean) => {
@@ -121,7 +125,7 @@ function ComboboxInput({
 	readOnly?: boolean;
 	autoFocus?: boolean;
 }) {
-	const t = useT();
+	const { t } = useTranslation("common");
 	const { value, itemToStringLabel, onValueChange } = useComboboxContext();
 
 	const displayValue = React.useMemo(() => {
@@ -143,12 +147,12 @@ function ComboboxInput({
 					className,
 				)}
 			>
-				<span className="truncate">{displayValue || placeholder || t("common.select")}</span>
+				<span className="truncate">{displayValue || placeholder || t("combobox.selectEllipsis3")}</span>
 				<div className="ml-2 flex shrink-0 items-center gap-1">
 					{showClear && value && (
 						<button
 							type="button"
-							aria-label={t("common.clearSelection")}
+							aria-label={t("combobox.clearSelection")}
 							data-testid="combobox-clear-button"
 							className="rounded-sm opacity-50 hover:opacity-100"
 							onClick={(e) => {
@@ -174,12 +178,23 @@ function ComboboxContent({
 	className,
 	children,
 	noPortalForContent,
+	shouldFilter,
+	highlightedValue,
+	onHighlightedValueChange,
 	...props
 }: {
 	className?: string;
 	children?: React.ReactNode;
 	anchor?: React.RefObject<HTMLElement | null>;
 	noPortalForContent?: boolean;
+	/**
+	 * False leaves the list exactly as rendered: cmdk neither drops rows nor reorders them.
+	 * For a list whose membership and order already came from the server.
+	 */
+	shouldFilter?: boolean;
+	/** Takes over the keyboard highlight. Needed when the rows themselves come and go. */
+	highlightedValue?: string;
+	onHighlightedValueChange?: (value: string) => void;
 	[key: string]: any;
 }) {
 	const { filter } = useComboboxContext();
@@ -190,10 +205,27 @@ function ComboboxContent({
 			align="start"
 			sideOffset={4}
 			noPortal={noPortalForContent}
-			onOpenAutoFocus={(e) => e.preventDefault()}
+			/*
+			 * Focus is taken here rather than through the input's own autoFocus. Inside a Sheet,
+			 * autoFocus fires during commit, before this scope has registered itself and paused
+			 * the sheet's focus trap, so the trap sees focus land outside its container and pulls
+			 * it straight back to the trigger. By the time radix dispatches this event the scope
+			 * is on the stack and the trap is paused, so the focus sticks.
+			 */
+			onOpenAutoFocus={(e) => {
+				e.preventDefault();
+				const input = (e.currentTarget as HTMLElement | null)?.querySelector<HTMLInputElement>("[cmdk-input]");
+				input?.focus();
+				// Caret at the end, not over the text: a field opened with the current selection in it
+				// is there to be extended, and a select-all would have the next keystroke wipe it.
+				if (input?.value) input.setSelectionRange(input.value.length, input.value.length);
+			}}
 			{...props}
 		>
 			<CommandPrimitive
+				shouldFilter={shouldFilter}
+				value={highlightedValue}
+				onValueChange={onHighlightedValueChange}
 				filter={
 					filter === null
 						? () => 1 // disable internal filtering — consumer controls it
@@ -206,20 +238,63 @@ function ComboboxContent({
 	);
 }
 
-function ComboboxList({ className, ...props }: React.ComponentProps<typeof CommandPrimitive.List>) {
-	const t = useT();
+function ComboboxList({
+	className,
+	searchPlaceholder,
+	showSearchIcon = false,
+	isSearching = false,
+	onInputKeyDown,
+	clearableSearch = false,
+	...props
+}: React.ComponentProps<typeof CommandPrimitive.List> & {
+	searchPlaceholder?: string;
+	/** Renders a magnifier ahead of the input so the list reads as searchable at a glance. */
+	showSearchIcon?: boolean;
+	/** Swaps the magnifier for a spinner while a search is in flight. */
+	isSearching?: boolean;
+	/** Runs before cmdk's own key handling on the search field, e.g. backspace over chips. */
+	onInputKeyDown?: React.KeyboardEventHandler<HTMLInputElement>;
+	/**
+	 * Puts an X at the end of the search field. For a field that can open with text already in
+	 * it, where getting back to the full list would otherwise mean holding backspace.
+	 */
+	clearableSearch?: boolean;
+}) {
+	const { t } = useTranslation("common");
 	const { inputValue, setInputValue } = useComboboxContext();
+	const inputRef = React.useRef<HTMLInputElement>(null);
 
 	return (
 		<>
-			<div className="flex items-center border-b px-3">
+			<div className="flex items-center gap-2 border-b px-3">
+				{showSearchIcon &&
+					(isSearching ? (
+						<Loader2Icon className="text-muted-foreground size-3.5 shrink-0 animate-spin" />
+					) : (
+						<SearchIcon className="text-muted-foreground size-3.5 shrink-0" />
+					))}
 				<CommandPrimitive.Input
-					placeholder={t("common.search")}
+					placeholder={searchPlaceholder ?? t("combobox.search")}
 					className="placeholder:text-muted-foreground flex h-8 w-full bg-transparent py-3 text-sm outline-none disabled:cursor-not-allowed disabled:opacity-50"
+					ref={inputRef}
 					value={inputValue}
-					autoFocus
 					onValueChange={setInputValue}
+					onKeyDown={onInputKeyDown}
 				/>
+				{clearableSearch && inputValue.length > 0 && (
+					<button
+						type="button"
+						aria-label={t("combobox.clearSearch")}
+						data-testid="combobox-search-clear"
+						className="text-muted-foreground hover:text-foreground shrink-0 cursor-pointer"
+						onClick={() => {
+							setInputValue("");
+							inputRef.current?.focus();
+						}}
+					>
+						<XIcon className="size-3.5" />
+					</button>
+				)}
 			</div>
 			<CommandPrimitive.List data-slot="combobox-list" className={cn("max-h-[300px] overflow-y-auto p-1", className)} {...props} />
 		</>
@@ -310,6 +385,12 @@ interface ComboboxSelectBaseProps {
 	creatable?: boolean;
 	createLabel?: (value: string) => React.ReactNode;
 	"data-testid"?: string;
+	// Per-option test id, so a test can pick a choice without matching its label text.
+	optionTestId?: (value: string) => string;
+	// Forwarded to the trigger button so a form label (FormControl / htmlFor) can target it.
+	id?: string;
+	// Accessible name for the trigger when no visible label is associated with it.
+	"aria-label"?: string;
 }
 
 interface ComboboxCreatableProps {
@@ -335,8 +416,7 @@ function ComboboxCreatable({
 	noPortal,
 	"data-testid": dataTestId,
 }: ComboboxCreatableProps) {
-	const t = useT();
-	const resolvedPlaceholder = placeholder ?? t("common.typeOrSelect");
+	const { t } = useTranslation("common");
 	const [open, setOpen] = React.useState(false);
 	const [query, setQuery] = React.useState(value ?? "");
 
@@ -385,7 +465,7 @@ function ComboboxCreatable({
 							selectValue(createValue);
 						}
 					}}
-					placeholder={resolvedPlaceholder}
+					placeholder={placeholder ?? t("combobox.typeOrSelect")}
 					disabled={disabled}
 					data-testid={dataTestId}
 					className={cn(
@@ -423,7 +503,7 @@ function ComboboxCreatable({
 								className="data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground relative flex w-full cursor-default items-center gap-2 rounded-sm py-1.5 pr-8 pl-2 text-sm outline-hidden select-none"
 								onSelect={() => selectValue(createValue)}
 							>
-								<span>{createLabel?.(createValue) ?? t("common.useValue", { value: createValue })}</span>
+								<span>{createLabel?.(createValue) ?? t("combobox.use", { value: createValue })}</span>
 							</CommandPrimitive.Item>
 						)}
 					</CommandPrimitive.List>
@@ -448,21 +528,26 @@ interface ComboboxSelectMultiProps extends ComboboxSelectBaseProps {
 type ComboboxSelectProps = (ComboboxSelectSingleProps | ComboboxSelectMultiProps) & { noPortal?: boolean; searchPlaceholder?: string };
 
 function ComboboxSelect(props: ComboboxSelectProps) {
-	const t = useT();
 	const {
 		options,
-		placeholder = t("common.selectEllipsis"),
+		placeholder: placeholderProp,
 		disabled = false,
 		disableSearch = false,
 		className,
-		emptyMessage = t("common.noResults"),
+		emptyMessage: emptyMessageProp,
 		noPortal,
 		compactTrigger = false,
 		creatable = false,
 		createLabel,
 		"data-testid": dataTestId,
 		searchPlaceholder,
+		optionTestId,
+		id,
+		"aria-label": ariaLabel,
 	} = props;
+	const { t } = useTranslation("common");
+	const placeholder = placeholderProp ?? t("combobox.select");
+	const emptyMessage = emptyMessageProp ?? t("combobox.noResults");
 
 	const [open, setOpen] = React.useState(false);
 	const [query, setQuery] = React.useState("");
@@ -500,6 +585,8 @@ function ComboboxSelect(props: ComboboxSelectProps) {
 						role="combobox"
 						aria-expanded={open}
 						disabled={disabled}
+						id={id}
+						aria-label={ariaLabel}
 						data-testid={dataTestId}
 						className={cn(
 							"h-8 w-full justify-between !bg-transparent font-normal active:scale-none",
@@ -511,14 +598,14 @@ function ComboboxSelect(props: ComboboxSelectProps) {
 							{selectedValues.length === 0 ? (
 								<span>{placeholder}</span>
 							) : compactTrigger ? (
-								<span className="text-foreground truncate text-sm">{t("common.nSelected", { count: selectedValues.length })}</span>
+								<span className="text-foreground truncate text-sm">{t("combobox.selectedCount", { count: selectedValues.length })}</span>
 							) : (
 								selectedValues.map((val) => (
 									<Badge key={val} variant="secondary" className="text-xs">
 										{getLabel(val)}
 										<button
 											type="button"
-											aria-label={t("common.removeItem", { label: getLabel(val) })}
+											aria-label={t("combobox.removeAria", { label: getLabel(val) })}
 											data-testid={`combobox-remove-${val}`}
 											className="ml-1 rounded-full opacity-50 outline-none hover:opacity-100"
 											onClick={(e) => {
@@ -540,7 +627,7 @@ function ComboboxSelect(props: ComboboxSelectProps) {
 						{!disableSearch && (
 							<div className="flex items-center border-b px-3">
 								<CommandPrimitive.Input
-									placeholder={searchPlaceholder || t("common.search")}
+									placeholder={searchPlaceholder || t("combobox.search")}
 									className="placeholder:text-muted-foreground flex h-8 w-full bg-transparent py-3 text-sm outline-none"
 									value={query}
 									onValueChange={setQuery}
@@ -559,6 +646,7 @@ function ComboboxSelect(props: ComboboxSelectProps) {
 											const next = isSelected ? selectedValues.filter((v) => v !== option.value) : [...selectedValues, option.value];
 											props.onValueChange?.(next);
 										}}
+										data-testid={optionTestId?.(option.value)}
 									>
 										{option.icon ? <span className="text-muted-foreground flex shrink-0 items-center">{option.icon}</span> : null}
 										<span>{option.label}</span>
@@ -574,7 +662,7 @@ function ComboboxSelect(props: ComboboxSelectProps) {
 									className="data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground relative flex w-full cursor-default items-center gap-2 rounded-sm py-1.5 pr-8 pl-2 text-sm outline-hidden select-none"
 									onSelect={() => props.onValueChange?.([...selectedValues, createValue])}
 								>
-									<span>{createLabel?.(createValue) ?? t("common.useValue", { value: createValue })}</span>
+									<span>{createLabel?.(createValue) ?? t("combobox.use", { value: createValue })}</span>
 								</CommandPrimitive.Item>
 							)}
 							{!disableSearch && filtered.length === 0 && !creatable && (
@@ -604,6 +692,8 @@ function ComboboxSelect(props: ComboboxSelectProps) {
 					role="combobox"
 					aria-expanded={open}
 					disabled={disabled}
+					id={id}
+					aria-label={ariaLabel}
 					data-testid={dataTestId}
 					className={cn(
 						"h-8 w-full justify-between !bg-transparent font-normal active:scale-none",
@@ -616,7 +706,7 @@ function ComboboxSelect(props: ComboboxSelectProps) {
 						{!props.hideClear && props.value && (
 							<button
 								type="button"
-								aria-label={t("common.clearSelection")}
+								aria-label={t("combobox.clearSelection")}
 								data-testid="combobox-select-clear-button"
 								className="rounded-sm opacity-50 hover:opacity-100"
 								onClick={(e) => {
@@ -637,7 +727,7 @@ function ComboboxSelect(props: ComboboxSelectProps) {
 					{!disableSearch && (
 						<div className="flex items-center border-b px-3">
 							<CommandPrimitive.Input
-								placeholder={searchPlaceholder || t("common.search")}
+								placeholder={searchPlaceholder || t("combobox.search")}
 								className="placeholder:text-muted-foreground flex h-8 w-full bg-transparent py-3 text-sm outline-none"
 								value={query}
 								onValueChange={setQuery}
@@ -654,6 +744,7 @@ function ComboboxSelect(props: ComboboxSelectProps) {
 									props.onValueChange?.(option.value);
 									setOpen(false);
 								}}
+								data-testid={optionTestId?.(option.value)}
 							>
 								{option.label}
 								<span className="pointer-events-none absolute right-2 flex size-4 items-center justify-center">
@@ -670,7 +761,7 @@ function ComboboxSelect(props: ComboboxSelectProps) {
 									setOpen(false);
 								}}
 							>
-								<span>{createLabel?.(createValue) ?? t("common.useValue", { value: createValue })}</span>
+								<span>{createLabel?.(createValue) ?? t("combobox.use", { value: createValue })}</span>
 							</CommandPrimitive.Item>
 						)}
 						{!disableSearch && filtered.length === 0 && !creatable && (
