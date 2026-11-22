@@ -625,6 +625,8 @@ func TestCustomProviderModelCapabilityConsensus(t *testing.T) {
 	const (
 		provider = schemas.ModelProvider("modelflare")
 		name     = "deepseek-v4-flash"
+		mixed    = "grok-4.7"
+		mixedID  = "modelflare/" + mixed
 		id       = "modelflare/" + name
 		chat     = "/v1/chat/completions"
 	)
@@ -645,11 +647,17 @@ func TestCustomProviderModelCapabilityConsensus(t *testing.T) {
 		{Model: name, Provider: "azure", Mode: "responses"},
 		{Model: "openrouter/deepseek/" + name, Provider: "openrouter", Mode: "embedding"},
 		{Model: "fireworks_ai/" + name, Provider: "fireworks_ai", Mode: "chat"},
+		{Model: mixed, Provider: "xai", Mode: "CHAT", InputCostPerToken: new(0.002),
+			MaxInputTokens: new(4000), MaxOutputTokens: new(5000), ContextLength: new(6000)},
+		{Model: mixed, Provider: "opencode-go", Mode: "responses"},
+		{Model: "openrouter/x-ai/" + mixed, Provider: "openrouter", Mode: "embedding"},
 	}
 	ds.SetPricingRowsForTest(rows)
 	loadParams(`{
 		"azure/deepseek-v4-flash": {"supported_endpoints":["/v1/chat/completions","/v1/responses","/v1/messages"]},
 		"deepseek/other-model": {"mode":"chat"},
+		"xai/grok-4.7": {"supported_endpoints":["/v1/chat/completions"]},
+		"opencode-go/grok-4.7": {"supported_endpoints":["/v1/responses","/v1/messages"]},
 		"deepseek-v4-flash": {"provider":"deepseek","supports_function_calling":true}
 	}`)
 
@@ -704,7 +712,20 @@ func TestCustomProviderModelCapabilityConsensus(t *testing.T) {
 	require.Nil(t, mc.GetPricingEntryForModel(name, provider))
 	require.Nil(t, ds.GetCapabilityEntry(name, provider))
 
-	got := enrich(schemas.Model{ID: id, Mode: "reported", SupportedEndpoints: []string{"/reported"}, SupportedMethods: []string{"reported"}})
+	mixedModel := enrich(schemas.Model{ID: mixedID})
+	require.Equal(t, "chat", mixedModel.Mode)
+	mixedInfo := mc.GetModelInfo(provider, mixed)
+	require.NotNil(t, mixedInfo)
+	for _, got := range []schemas.Model{mixedModel, *mixedInfo} {
+		require.Equal(t, "chat", got.Mode)
+		require.Equal(t, []string{chat}, got.SupportedEndpoints)
+		require.Equal(t, []string{string(schemas.ChatCompletionRequest)}, got.SupportedMethods)
+		checkNoPricing(got)
+	}
+	require.Nil(t, mc.GetPricingEntryForModel(mixed, provider))
+	require.Nil(t, ds.GetCapabilityEntry(mixed, provider))
+
+	got := enrich(schemas.Model{ID: mixedID, Mode: "reported", SupportedEndpoints: []string{"/reported"}, SupportedMethods: []string{"reported"}})
 	require.Equal(t, "reported", got.Mode)
 	require.Equal(t, []string{"/reported", chat}, got.SupportedEndpoints)
 	require.Equal(t, []string{"reported", string(schemas.ChatCompletionRequest)}, got.SupportedMethods)
@@ -727,12 +748,16 @@ func TestCustomProviderModelCapabilityConsensus(t *testing.T) {
 	ds.SetPricingRowsForTest(append(slices.Clone(rows),
 		tables.TableModelPricing{Model: name, Provider: string(provider), Mode: "completion", InputCostPerToken: new(0.05)},
 		tables.TableModelPricing{Model: "own-wire", Provider: string(provider), Mode: "embedding"},
+		tables.TableModelPricing{Model: mixed, Provider: string(provider), Mode: "responses"},
 	))
 	got = enrich(schemas.Model{ID: id})
 	require.Equal(t, "completion", got.Mode)
 	require.Equal(t, []string{"/v1/completions"}, got.SupportedEndpoints)
 	require.NotNil(t, got.Pricing)
 	require.Equal(t, "0.0500000000", *got.Pricing.Prompt)
+	got = enrich(schemas.Model{ID: mixedID})
+	require.Equal(t, "responses", got.Mode)
+	require.Equal(t, []string{"/v1/responses"}, got.SupportedEndpoints)
 	got = enrich(schemas.Model{ID: "modelflare/exact-wire"})
 	require.Equal(t, "embedding", got.Mode)
 	require.Equal(t, []string{"/v1/embeddings"}, got.SupportedEndpoints)
@@ -741,7 +766,8 @@ func TestCustomProviderModelCapabilityConsensus(t *testing.T) {
 	require.Equal(t, []string{"/v1/rerank", "/vendor/modelflare"}, got.SupportedEndpoints)
 
 	loadParams(`{"deepseek/other-model":{"mode":"chat"}}`)
-	ds.SetPricingRowsForTest([]tables.TableModelPricing{rows[0], rows[3],
+	ds.SetPricingRowsForTest([]tables.TableModelPricing{rows[3],
+		{Model: name, Provider: "deepseek", Mode: "decisions"},
 		{Model: name, Provider: "azure", Mode: "embedding"},
 	})
 	got = enrich(schemas.Model{ID: id})
