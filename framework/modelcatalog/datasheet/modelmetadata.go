@@ -169,11 +169,13 @@ func (s *Store) rebuildModelModesUnsafe() {
 	s.rebuildModelConsensusUnsafe()
 }
 
-// rebuildModelConsensusUnsafe intersects the exact capability sets of distinct
-// providers. Caller holds mu. Family indexes are excluded.
+// rebuildModelConsensusUnsafe prefers chat among exact-name modes and otherwise
+// intersects distinct provider mode sets. Explicit endpoint consensus is independent.
+// Caller holds mu. Family indexes are excluded.
 func (s *Store) rebuildModelConsensusUnsafe() {
 	type consensus struct {
 		parameterModelMetadata
+		hasChat           bool
 		providers         int
 		endpointProviders int
 	}
@@ -183,14 +185,19 @@ func (s *Store) rebuildModelConsensusUnsafe() {
 			return
 		}
 		entry := byName[name]
-		if entry.providers == 0 {
-			for _, mode := range modes {
-				entry.modes = append(entry.modes, strings.ToLower(mode))
+		entry.hasChat = entry.hasChat || slices.ContainsFunc(modes, func(mode string) bool {
+			return strings.EqualFold(mode, "chat")
+		})
+		if !entry.hasChat {
+			if entry.providers == 0 {
+				for _, mode := range modes {
+					entry.modes = append(entry.modes, strings.ToLower(mode))
+				}
+			} else {
+				entry.modes = slices.DeleteFunc(entry.modes, func(mode string) bool {
+					return !slices.ContainsFunc(modes, func(other string) bool { return strings.EqualFold(mode, other) })
+				})
 			}
-		} else {
-			entry.modes = slices.DeleteFunc(entry.modes, func(mode string) bool {
-				return !slices.ContainsFunc(modes, func(other string) bool { return strings.EqualFold(mode, other) })
-			})
 		}
 		entry.providers++
 		if len(endpoints) > 0 {
@@ -220,8 +227,12 @@ func (s *Store) rebuildModelConsensusUnsafe() {
 		if entry.endpointProviders < 2 {
 			entry.endpoints = nil
 		}
-		if len(entry.modes) > 0 || len(entry.endpoints) > 0 {
+		if entry.hasChat {
+			entry.modes = []string{"chat"}
+		} else {
 			entry.modes = sortCapabilityModes(entry.modes)
+		}
+		if len(entry.modes) > 0 || len(entry.endpoints) > 0 {
 			s.modelConsensus[name] = entry.parameterModelMetadata
 		}
 	}

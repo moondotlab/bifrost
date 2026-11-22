@@ -1,3 +1,4 @@
+- fix: prefer `chat` for a custom provider without an exact catalog record when any exact-name row includes it, and otherwise use the mode intersection. Explicit endpoints still require agreement from at least two providers that list them. Listed routes do not guarantee vendor support, and the fallback does not copy pricing.
 - fix: model catalog fills missing custom-provider capabilities from exact-name catalog consensus when the provider has no exact record
 - feat: model catalog aggregates provider-scoped modes and endpoints for model lists and lookups
 - feat: model routers - `model_routers` and `model_router_targets` tables with config.json support, and the log-store tables and columns for phrase suggestions and routed requests
