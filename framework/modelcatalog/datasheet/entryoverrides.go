@@ -573,6 +573,7 @@ func (s *Store) dropRemovedOverrideOnlyParams() {
 	s.entryOverridesMu.RUnlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	metadataRemoved := false
 	for model := range s.paramsOverrideOnly {
 		if _, ok := stillPatched[model]; ok {
 			continue
@@ -581,9 +582,13 @@ func (s *Store) dropRemovedOverrideOnlyParams() {
 		delete(s.supportedResponseTypes, model)
 		if key, ok := s.overrideMetadataKeys[model]; ok {
 			delete(s.parameterMetadata, key)
+			metadataRemoved = true
 			delete(s.overrideMetadataKeys, model)
 		}
 		delete(s.paramsOverrideOnly, model)
+	}
+	if metadataRemoved {
+		s.rebuildModelConsensusUnsafe()
 	}
 }
 

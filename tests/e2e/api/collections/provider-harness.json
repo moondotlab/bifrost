@@ -202548,6 +202548,51 @@
           }
         },
         {
+          "name": "/v1/models - custom provider capability consensus - typesafe_custom",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Custom provider model lists catalog capabilities', function () {",
+                  "  var text = pm.response.text();",
+                  "  pm.expect(pm.response.code, text).to.eql(200);",
+                  "  var models = pm.response.json().data;",
+                  "  pm.expect(models, text).to.be.an('array');",
+                  "  var model = models.find(function (m) { return m.id === 'typesafe_custom/jev-1.13.0'; });",
+                  "  pm.expect(model, text).to.be.an('object');",
+                  "  pm.expect(model.supported_endpoints, JSON.stringify(model)).to.include('/v1/decisions');",
+                  "  pm.expect(model.supported_methods, JSON.stringify(model)).to.include('decisions');",
+                  "  pm.expect(model, JSON.stringify(model)).to.have.property('mode');",
+                  "  pm.expect(model, JSON.stringify(model)).to.not.have.property('pricing');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/models?provider=typesafe_custom",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "models"
+              ],
+              "query": [
+                {
+                  "key": "provider",
+                  "value": "typesafe_custom"
+                }
+              ]
+            }
+          }
+        },
+        {
           "name": "/typesafe/v1/models - custom provider listing uses bare names - typesafe_custom jev models",
           "event": [
             {

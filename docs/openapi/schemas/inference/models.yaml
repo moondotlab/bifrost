@@ -60,10 +60,10 @@ Model:
       type: string
     mode:
       type: string
-      description: 'Preferred catalog mode (chat, then responses, then completion, then the first remaining mode alphabetically) or the provider-reported mode. A model may support multiple modes.'
+      description: 'Preferred catalog mode (chat, then responses, then completion, then the first remaining mode alphabetically) or the provider-reported mode. A model may support multiple modes. If a custom provider has no exact catalog record, missing mode metadata can come from the modes shared by catalog providers for the exact model name.'
     supported_endpoints:
       type: array
-      description: 'Gateway route identifiers aggregated from catalog capabilities and provider-reported metadata. A listed route does not guarantee that every configured vendor implements that compatibility surface.'
+      description: 'Gateway route identifiers aggregated from catalog capabilities and provider-reported metadata. For a custom provider without an exact catalog record, missing endpoint metadata can come from a shared mode or from the intersection of explicit endpoint lists from at least two catalog providers for the exact name. A listed route does not guarantee that every configured vendor implements that compatibility surface.'
       items:
         type: string
     supported_methods:
