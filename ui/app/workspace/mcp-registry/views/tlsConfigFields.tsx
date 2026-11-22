@@ -1,8 +1,8 @@
 import { FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { SecretVarInput } from "@/components/ui/secretVarInput";
 import { Switch } from "@/components/ui/switch";
-import { useT } from "@/lib/i18n";
 import type { Control } from "react-hook-form";
+import { useTranslation } from "react-i18next";
 
 interface TLSConfigFieldsProps {
 	// Loosely typed on purpose: this fragment is shared between the create form
@@ -14,7 +14,7 @@ interface TLSConfigFieldsProps {
 
 /** Skip TLS Verification switch + CA Certificate PEM input, shared by the MCP create form and edit sheet. */
 export function TLSConfigFields({ control, disabled }: TLSConfigFieldsProps) {
-	const t = useT();
+	const { t } = useTranslation("mcp");
 	return (
 		<>
 			<FormField
@@ -23,8 +23,8 @@ export function TLSConfigFields({ control, disabled }: TLSConfigFieldsProps) {
 				render={({ field }) => (
 					<FormItem className="flex flex-row items-center justify-between gap-4">
 						<div className="space-y-0.5">
-							<FormLabel>{t("mcp.tls.skipVerify")}</FormLabel>
-							<p className="text-muted-foreground text-sm">{t("mcp.tls.skipVerifyDesc")}</p>
+							<FormLabel>{t("registry.tls.skipVerify")}</FormLabel>
+							<p className="text-muted-foreground text-sm">{t("registry.tls.skipVerifyHelp")}</p>
 						</div>
 						<FormControl>
 							<Switch
@@ -42,12 +42,12 @@ export function TLSConfigFields({ control, disabled }: TLSConfigFieldsProps) {
 				name="tls_config.ca_cert_pem"
 				render={({ field }) => (
 					<FormItem>
-						<FormLabel>{t("mcp.tls.caCert")}</FormLabel>
-						<p className="text-muted-foreground text-xs">{t("mcp.tls.caCertDesc")}</p>
+						<FormLabel>{t("registry.tls.caCertPem")}</FormLabel>
+						<p className="text-muted-foreground text-xs">{t("registry.tls.caCertPemHelp")}</p>
 						<FormControl>
 							<SecretVarInput
 								variant="textarea"
-								placeholder={t("mcp.tls.caCertPlaceholder")}
+								placeholder={t("registry.tls.caCertPemPlaceholder")}
 								className="font-mono text-xs"
 								rows={6}
 								hideValueWhenEnv

@@ -15,7 +15,8 @@ import (
 	"github.com/maximhq/bifrost/core/schemas"
 	"github.com/maximhq/bifrost/framework/configstore"
 	configtables "github.com/maximhq/bifrost/framework/configstore/tables"
-	"github.com/maximhq/bifrost/transports/bifrost-http/lib"
+	"github.com/maximhq/bifrost/framework/grant"
+	"github.com/maximhq/bifrost/transports/v2/bifrost-http/lib"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/valyala/fasthttp"
@@ -102,6 +103,15 @@ func (m *mockOAuth2Store) ConsentOAuth2AuthorizeRequest(_ context.Context, req *
 	return nil
 }
 
+func (m *mockOAuth2Store) DenyOAuth2AuthorizeRequest(_ context.Context, id string) error {
+	existing, ok := m.authReqs[id]
+	if !ok || existing.Status != configtables.OAuth2AuthorizeRequestStatusPending {
+		return configstore.ErrNotFound
+	}
+	existing.Status = configtables.OAuth2AuthorizeRequestStatusRevoked
+	return nil
+}
+
 func (m *mockOAuth2Store) GetOAuth2SigningKey(_ context.Context) (*configtables.OAuth2SigningKey, error) {
 	if m.signingErr != nil {
 		return nil, m.signingErr
@@ -158,7 +168,7 @@ func newTestOAuth2Config(store configstore.ConfigStore, authMode configtables.MC
 // mintTestToken signs a token with valid defaults (vk mode), applying mutate to
 // override claims/header for negative cases. signMethod and signKey let callers
 // force a non-RS256 algorithm or a wrong signing key.
-func mintTestToken(t *testing.T, priv *rsa.PrivateKey, kid string, mutate func(jwt.MapClaims)) string {
+func mintTestToken(t testing.TB, priv *rsa.PrivateKey, kid string, mutate func(jwt.MapClaims)) string {
 	t.Helper()
 	now := time.Now()
 	claims := jwt.MapClaims{
@@ -355,6 +365,7 @@ func TestVerifyMCPJWT_Rejections(t *testing.T) {
 			claims, err := verifyMCPJWT(ctx, tc.raw(), cfg, key)
 			require.Error(t, err)
 			assert.Nil(t, claims)
+			assert.ErrorIs(t, err, errOAuth2TokenRejected, "a bad token must be reported as a rejected token")
 		})
 	}
 }
@@ -373,6 +384,7 @@ func TestVerifyMCPJWT_NilSigningKeyNotLabeledInvalidToken(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "signing key unavailable")
 	assert.NotContains(t, err.Error(), "invalid token")
+	assert.NotErrorIs(t, err, errOAuth2TokenRejected)
 }
 
 // TestCachedSigningKey_ConfigFaults pins that the handler's key loader — which
@@ -409,6 +421,11 @@ func TestInjectJWTContext(t *testing.T) {
 		}, nil)
 		require.NoError(t, err)
 		assert.Equal(t, "user-1", bc.Value(schemas.BifrostContextKeyUserID))
+		identity := bc.Grant().Identity()
+		require.NotNil(t, identity)
+		assert.Equal(t, grant.NewCredential(grant.CredentialMCPToken, "user-1"), identity.Credential())
+		require.NotNil(t, identity.User())
+		assert.Equal(t, "user-1", identity.User().ID)
 	})
 
 	t.Run("vk mode sets the raw vk value and lets governance derive the id", func(t *testing.T) {
@@ -421,6 +438,11 @@ func TestInjectJWTContext(t *testing.T) {
 		// The VK row ID is resolved later by governance's PreMCPConnectionHook from
 		// the value, not stamped here — mirrors the x-bf-vk header path.
 		assert.Nil(t, bc.Value(schemas.BifrostContextKeyGovernanceVirtualKeyID))
+		// Settled as the key, the way a header key is, so governance resolves the key's permit.
+		identity := bc.Grant().Identity()
+		require.NotNil(t, identity)
+		assert.Equal(t, grant.NewCredential(grant.CredentialVirtualKey, "sk-bf-active"), identity.Credential())
+		assert.Nil(t, identity.User())
 	})
 
 	t.Run("vk mode without vk errors", func(t *testing.T) {
@@ -438,6 +460,8 @@ func TestInjectJWTContext(t *testing.T) {
 		}, nil)
 		require.NoError(t, err)
 		assert.Equal(t, "session-abc", bc.Value(schemas.BifrostContextKeyMCPSessionID))
+		// Nothing verified, nothing recorded: the request is admitted as anonymous.
+		assert.Nil(t, bc.Grant())
 	})
 
 	t.Run("missing sub errors", func(t *testing.T) {

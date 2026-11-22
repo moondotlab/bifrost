@@ -686,10 +686,11 @@ func TestBuildInputWithDisposition(t *testing.T) {
 	userRole := schemas.ResponsesInputMessageRoleUser
 	assistantRole := schemas.ResponsesInputMessageRoleAssistant
 	tests := []struct {
-		name string
-		ctx  *schemas.BifrostContext
-		req  *schemas.BifrostRequest
-		want InputDisposition
+		name     string
+		ctx      *schemas.BifrostContext
+		req      *schemas.BifrostRequest
+		want     InputDisposition
+		wantText string
 	}{
 		{
 			name: "human turn is classifiable",
@@ -716,6 +717,20 @@ func TestBuildInputWithDisposition(t *testing.T) {
 				}},
 			},
 			want: InputClassifiable,
+		},
+		{
+			name: "chat textless user fragment does not hide earlier human turn",
+			req: &schemas.BifrostRequest{
+				RequestType: schemas.ChatCompletionRequest,
+				ChatRequest: &schemas.BifrostChatRequest{Input: []schemas.ChatMessage{
+					{Role: schemas.ChatMessageRoleUser, Content: complexityChatString("Inspect the attached image")},
+					{Role: schemas.ChatMessageRoleUser, Content: complexityChatBlocks(
+						schemas.ChatContentBlock{Type: schemas.ChatContentBlockTypeImage},
+					)},
+				}},
+			},
+			want:     InputContinuation,
+			wantText: "Inspect the attached image",
 		},
 		{
 			name: "claude code text and image in one turn is classifiable",
@@ -751,7 +766,8 @@ func TestBuildInputWithDisposition(t *testing.T) {
 					{Role: schemas.ChatMessageRoleTool, Content: complexityChatString("Tests passed")},
 				}},
 			},
-			want: InputContinuation,
+			want:     InputContinuation,
+			wantText: "Run the tests",
 		},
 		{
 			name: "responses replay followed by tool output is a continuation",
@@ -765,7 +781,8 @@ func TestBuildInputWithDisposition(t *testing.T) {
 					}},
 				}
 			}(),
-			want: InputContinuation,
+			want:     InputContinuation,
+			wantText: "Run the tests",
 		},
 		{
 			name: "unsupported operation bypasses session state",
@@ -789,8 +806,11 @@ func TestBuildInputWithDisposition(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, got := BuildInputWithDisposition(tt.ctx, tt.req)
+			input, got := BuildInputWithDisposition(tt.ctx, tt.req)
 			assert.Equal(t, tt.want, got)
+			if tt.wantText != "" {
+				assert.Equal(t, tt.wantText, input.LastUserText)
+			}
 		})
 	}
 }
@@ -832,4 +852,27 @@ func complexityResponsesTextBlock(text string) schemas.ResponsesMessageContentBl
 
 func complexityResponsesOutputTextBlock(text string) schemas.ResponsesMessageContentBlock {
 	return schemas.ResponsesMessageContentBlock{Type: schemas.ResponsesOutputMessageContentTypeText, Text: &text}
+}
+
+// A logged request reads back as the text classification embedded: the same
+// history window, and the harness clean-up its user agent selected.
+func TestLoggedInputTextMatchesWhatClassificationEmbedded(t *testing.T) {
+	chat := []schemas.ChatMessage{
+		{Role: schemas.ChatMessageRoleSystem, Content: complexityChatString("You are helpful")},
+		{Role: schemas.ChatMessageRoleUser, Content: complexityChatString("Explain vector clocks")},
+		{Role: schemas.ChatMessageRoleUser, Content: complexityChatString("<system-reminder>Use the repository instructions</system-reminder>")},
+	}
+	assert.Equal(t, "Explain vector clocks", LoggedInputText(chat, nil, schemas.ClaudeCLI.String(), 1),
+		"Claude Code's context block is stripped, as classification strips it")
+	assert.Equal(t, "<system-reminder>Use the repository instructions</system-reminder>", LoggedInputText(chat, nil, "curl/8.0", 1),
+		"without the harness user agent the block is the human turn, as it was when classified")
+
+	userRole := schemas.ResponsesInputMessageRoleUser
+	responses := []schemas.ResponsesMessage{
+		{Role: &userRole, Content: complexityResponsesString("Explain vector clocks")},
+		{Role: &userRole, Content: complexityResponsesString("Compare them to Lamport clocks")},
+	}
+	assert.Equal(t, "Explain vector clocks\nCompare them to Lamport clocks", LoggedInputText(nil, responses, "", 2))
+	assert.Equal(t, "Compare them to Lamport clocks", LoggedInputText(nil, responses, "", 1))
+	assert.Empty(t, LoggedInputText(nil, nil, "", 1), "a log with no history has no text")
 }

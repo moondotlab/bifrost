@@ -2,8 +2,8 @@ import * as SheetPrimitive from "@radix-ui/react-dialog";
 import { ArrowLeftFromLineIcon, ArrowRightFromLineIcon, XIcon } from "lucide-react";
 import * as React from "react";
 import { createContext, useContext, useState } from "react";
+import { useTranslation } from "react-i18next";
 
-import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 // Context to share expanded state between SheetContent and SheetHeader
@@ -112,14 +112,14 @@ function SheetContent({
 					className={cn(
 						"bg-card data-[state=open]:animate-in data-[state=closed]:animate-out custom-scrollbar fixed z-50 flex flex-col shadow-lg transition-all ease-in-out overscroll-none data-[state=closed]:duration-100 data-[state=open]:duration-100",
 						side === "right" &&
-							"data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right top-2 right-2 bottom-2  h-auto w-full rounded-sm border-l sm:w-3/4",
+							"data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right top-2 right-2 bottom-2  h-auto w-full rounded-sm border sm:w-3/4",
 						side === "right" && (!expandable || !expanded) && "sm:max-w-2xl",
 						side === "right" && expandable && expanded && "sm:max-w-5xl",
 						side === "left" &&
-							"data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left top-2 bottom-2 left-2 h-auto w-full rounded-sm border-r sm:w-3/4 sm:max-w-sm",
-						side === "top" && "data-[state=closed]:slide-out-to-top data-[state=open]:slide-in-from-top inset-x-0 top-2 h-auto border-b",
+							"data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left top-2 bottom-2 left-2 h-auto w-full rounded-sm border sm:w-3/4 sm:max-w-sm",
+						side === "top" && "data-[state=closed]:slide-out-to-top data-[state=open]:slide-in-from-top inset-x-0 top-2 h-auto border",
 						side === "bottom" &&
-							"data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom inset-x-0 bottom-2 h-auto border-t",
+							"data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom inset-x-0 bottom-2 h-auto border",
 						className,
 					)}
 					{...props}
@@ -138,7 +138,7 @@ function SheetHeader({
 	showCloseButton = true,
 	...props
 }: React.ComponentProps<"div"> & { showCloseButton?: boolean; headerClassName?: string }) {
-	const t = useT();
+	const { t } = useTranslation("common");
 	const sheetContext = useSheetContext();
 
 	return (
@@ -154,7 +154,7 @@ function SheetHeader({
 					className="-ml-5 shrink-0 cursor-pointer opacity-70 transition-opacity hover:scale-105 hover:opacity-100"
 				>
 					{sheetContext?.expanded ? <ArrowRightFromLineIcon className="size-4" /> : <ArrowLeftFromLineIcon className="size-4" />}
-					<span className="sr-only">{sheetContext?.expanded ? t("common.collapse") : t("common.expand")}</span>
+					<span className="sr-only">{sheetContext?.expanded ? t("sheet.collapse") : t("sheet.expand")}</span>
 				</button>
 			)}
 
@@ -164,7 +164,7 @@ function SheetHeader({
 			{showCloseButton && (
 				<SheetPrimitive.Close className="hover:bg-accent shrink-0 cursor-pointer rounded-md p-2 opacity-70 transition-opacity hover:opacity-100">
 					<XIcon className="size-4" />
-					<span className="sr-only">{t("common.close")}</span>
+					<span className="sr-only">{t("close")}</span>
 				</SheetPrimitive.Close>
 			)}
 		</div>

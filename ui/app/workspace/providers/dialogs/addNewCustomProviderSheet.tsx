@@ -1,11 +1,11 @@
+import { BaseProviderSelector } from "@/components/ui/baseProviderSelector";
 import { Button } from "@/components/ui/button";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Switch } from "@/components/ui/switch";
 import { DefaultNetworkConfig } from "@/lib/constants/config";
-import { useT } from "@/lib/i18n";
+import i18n from "@/lib/i18n";
 import { getErrorMessage, useCreateProviderMutation } from "@/lib/store";
 import { BaseProvider, ModelProviderName } from "@/lib/types/config";
 import { allowedRequestsSchema } from "@/lib/types/schemas";
@@ -17,14 +17,20 @@ import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import { z } from "zod";
 import { AllowedRequestsFields } from "../fragments/allowedRequestsFields";
+import { useTranslation } from "react-i18next";
 
 const formSchema = z.object({
 	name: z.string().min(1),
 	baseFormat: z.string().min(1),
-	base_url: z.string().min(1, "Base URL is required").url("Must be a valid URL"),
+	base_url: z
+		.string()
+		.min(1, { error: () => i18n.t("providers.customBaseUrlRequired", { ns: "models" }) })
+		.url({ error: () => i18n.t("validation.validUrl") }),
 	allowed_requests: allowedRequestsSchema,
 	request_path_overrides: z.record(z.string(), z.string().optional()).optional(),
 	is_key_less: z.boolean().optional(),
+	does_not_send_done_marker: z.boolean().optional(),
+	wait_for_usage: z.boolean().optional(),
 	allow_private_network: z.boolean().optional(),
 });
 
@@ -41,7 +47,8 @@ interface Props extends AddCustomProviderSheetContentProps {
 }
 
 export function AddCustomProviderSheetContent({ show = true, onClose, onSave }: AddCustomProviderSheetContentProps) {
-	const t = useT();
+	const { t } = useTranslation("models");
+	const { t: tc } = useTranslation("common");
 	const hasProviderCreateAccess = useRbac(RbacResource.ModelProvider, RbacOperation.Create);
 	const [addProvider, { isLoading: isAddingProvider }] = useCreateProviderMutation();
 	const form = useForm<FormData>({
@@ -72,6 +79,7 @@ export function AddCustomProviderSheetContent({ show = true, onClose, onSave }: 
 				image_edit_stream: true,
 				image_variation: true,
 				rerank: true,
+				decisions: true,
 				ocr: true,
 				ocr_stream: true,
 				video_generation: true,
@@ -81,13 +89,18 @@ export function AddCustomProviderSheetContent({ show = true, onClose, onSave }: 
 				video_delete: true,
 				video_list: true,
 				video_remix: true,
+				passthrough: true,
+				passthrough_stream: true,
 				count_tokens: true,
 				list_models: true,
 				websocket_responses: true,
 				realtime: false,
+				live: false,
 			},
 			request_path_overrides: undefined,
 			is_key_less: false,
+			does_not_send_done_marker: false,
+			wait_for_usage: false,
 			allow_private_network: false,
 		},
 	});
@@ -106,6 +119,8 @@ export function AddCustomProviderSheetContent({ show = true, onClose, onSave }: 
 				allowed_requests: data.allowed_requests,
 				request_path_overrides: cleanPathOverrides(data.request_path_overrides),
 				is_key_less: data.is_key_less ?? false,
+				does_not_send_done_marker: data.does_not_send_done_marker ?? false,
+				wait_for_usage: data.wait_for_usage ?? false,
 			},
 			network_config: {
 				base_url: data.base_url,
@@ -124,7 +139,7 @@ export function AddCustomProviderSheetContent({ show = true, onClose, onSave }: 
 				form.reset();
 			})
 			.catch((err) => {
-				toast.error(t("providers.addFailed"), {
+				toast.error(t("providers.failedToAdd"), {
 					description: getErrorMessage(err),
 				});
 			});
@@ -132,12 +147,31 @@ export function AddCustomProviderSheetContent({ show = true, onClose, onSave }: 
 
 	const baseFormat = form.watch("baseFormat") as BaseProvider;
 	const isKeyLessDisabled = baseFormat === "bedrock";
+	// Only the OpenAI stream loops read this flag; every other base format ignores it.
+	const isDoneMarkerToggleDisabled = baseFormat !== "openai";
+	// wait_for_usage only has meaning once the stream ends on finish_reason, so the
+	// toggle is nested under does_not_send_done_marker rather than offered on its own.
+	const doesNotSendDoneMarker = form.watch("does_not_send_done_marker");
+
+	useEffect(() => {
+		if (isDoneMarkerToggleDisabled) {
+			form.setValue("does_not_send_done_marker", false);
+		}
+	}, [isDoneMarkerToggleDisabled, form]);
+
+	// Clear the nested flag whenever its parent goes away: the provider update replaces
+	// custom_provider_config wholesale, so a stale true would otherwise be persisted.
+	useEffect(() => {
+		if (isDoneMarkerToggleDisabled || !doesNotSendDoneMarker) {
+			form.setValue("wait_for_usage", false);
+		}
+	}, [isDoneMarkerToggleDisabled, doesNotSendDoneMarker, form]);
 
 	return (
 		<>
 			<SheetHeader className="flex shrink-0 flex-col items-start py-4" headerClassName="mb-0 sticky -top-4 bg-card z-10 px-4 md:px-8">
-				<SheetTitle>{t("providers.addCustom")}</SheetTitle>
-				<SheetDescription>{t("providers.addCustomSheet.description")}</SheetDescription>
+				<SheetTitle>{t("providers.addCustomTitle")}</SheetTitle>
+				<SheetDescription>{t("providers.addCustomDescription")}</SheetDescription>
 			</SheetHeader>
 			<Form {...form}>
 				<form onSubmit={form.handleSubmit(onSubmit)} className="flex flex-col">
@@ -147,11 +181,11 @@ export function AddCustomProviderSheetContent({ show = true, onClose, onSave }: 
 							name="name"
 							render={({ field }) => (
 								<FormItem className="flex flex-col gap-3">
-									<FormLabel className="text-right">{t("common.name")}</FormLabel>
+									<FormLabel className="text-right">{t("providers.name")}</FormLabel>
 									<div className="col-span-3">
 										<FormControl>
 											<Input
-												placeholder={t("common.name")}
+												placeholder={t("providers.name")}
 												data-testid="custom-provider-name"
 												disabled={!hasProviderCreateAccess}
 												{...field}
@@ -170,19 +204,12 @@ export function AddCustomProviderSheetContent({ show = true, onClose, onSave }: 
 									<FormLabel>{t("providers.baseFormat")}</FormLabel>
 									<div>
 										<FormControl>
-											<Select onValueChange={field.onChange} value={field.value} disabled={!hasProviderCreateAccess}>
-												<SelectTrigger className="w-full" data-testid="base-provider-select">
-													<SelectValue placeholder={t("providers.addCustomSheet.selectBaseFormat")} />
-												</SelectTrigger>
-												<SelectContent>
-													<SelectItem value="openai">OpenAI</SelectItem>
-													<SelectItem value="anthropic">Anthropic</SelectItem>
-													<SelectItem value="gemini">Gemini</SelectItem>
-													<SelectItem value="cohere">Cohere</SelectItem>
-													<SelectItem value="bedrock">AWS Bedrock</SelectItem>
-													<SelectItem value="replicate">Replicate</SelectItem>
-												</SelectContent>
-											</Select>
+											<BaseProviderSelector
+												data-testid="base-provider-select"
+												value={field.value}
+												onChange={field.onChange}
+												disabled={!hasProviderCreateAccess}
+											/>
 										</FormControl>
 										<FormMessage />
 									</div>
@@ -194,7 +221,7 @@ export function AddCustomProviderSheetContent({ show = true, onClose, onSave }: 
 							name="base_url"
 							render={({ field }) => (
 								<FormItem className="flex flex-col gap-3">
-									<FormLabel>{t("providers.baseURL")}</FormLabel>
+									<FormLabel>{t("providers.baseUrl")}</FormLabel>
 									<div>
 										<FormControl>
 											<Input
@@ -215,12 +242,12 @@ export function AddCustomProviderSheetContent({ show = true, onClose, onSave }: 
 							name="allow_private_network"
 							render={({ field }) => (
 								<FormItem>
-									<div className="flex items-center justify-between space-x-2 rounded-lg border p-3">
+									<div className="bg-muted/50 flex items-center justify-between space-x-2 rounded-sm border p-3">
 										<div className="space-y-0.5">
 											<label htmlFor="allow-private-network" className="text-sm font-medium">
-												{t("providers.addCustomSheet.allowPrivateNetwork")}
+												{t("providers.allowPrivateNetwork")}
 											</label>
-											<p className="text-muted-foreground text-sm">{t("providers.addCustomSheet.allowPrivateNetworkHint")}</p>
+											<p className="text-muted-foreground text-sm">{t("providers.allowPrivateNetworkDesc")}</p>
 										</div>
 										<Switch
 											id="allow-private-network"
@@ -240,12 +267,12 @@ export function AddCustomProviderSheetContent({ show = true, onClose, onSave }: 
 								name="is_key_less"
 								render={({ field }) => (
 									<FormItem>
-										<div className="flex items-center justify-between space-x-2 rounded-lg border p-3">
+										<div className="bg-muted/50 flex items-center justify-between space-x-2 rounded-sm border p-3">
 											<div className="space-y-0.5">
 												<label htmlFor="drop-excess-requests" className="text-sm font-medium">
-													{t("providers.addCustomSheet.isKeyless")}
+													{t("providers.isKeyless")}
 												</label>
-												<p className="text-muted-foreground text-sm">{t("providers.addCustomSheet.isKeylessHint")}</p>
+												<p className="text-muted-foreground text-sm">{t("providers.requiresKey")}</p>
 											</div>
 											<Switch
 												id="drop-excess-requests"
@@ -254,6 +281,58 @@ export function AddCustomProviderSheetContent({ show = true, onClose, onSave }: 
 												onCheckedChange={field.onChange}
 												disabled={!hasProviderCreateAccess}
 												data-testid="custom-provider-keyless-switch"
+											/>
+										</div>
+									</FormItem>
+								)}
+							/>
+						)}
+						{!isDoneMarkerToggleDisabled && (
+							<FormField
+								control={form.control}
+								name="does_not_send_done_marker"
+								render={({ field }) => (
+									<FormItem>
+										<div className="bg-muted/50 flex items-center justify-between space-x-2 rounded-sm border p-3">
+											<div className="space-y-0.5">
+												<label htmlFor="does-not-send-done-marker" className="text-sm font-medium">
+													{t("providers.doesNotSendDoneMarker")}
+												</label>
+												<p className="text-muted-foreground text-sm">{t("providers.doesNotSendDoneMarkerHelp")}</p>
+											</div>
+											<Switch
+												id="does-not-send-done-marker"
+												size="md"
+												checked={field.value}
+												onCheckedChange={field.onChange}
+												disabled={!hasProviderCreateAccess}
+												data-testid="custom-provider-does-not-send-done-marker-switch"
+											/>
+										</div>
+									</FormItem>
+								)}
+							/>
+						)}
+						{!isDoneMarkerToggleDisabled && doesNotSendDoneMarker && (
+							<FormField
+								control={form.control}
+								name="wait_for_usage"
+								render={({ field }) => (
+									<FormItem>
+										<div className="bg-muted/50 flex items-center justify-between space-x-2 rounded-sm border p-3">
+											<div className="space-y-0.5">
+												<label htmlFor="wait-for-usage" className="text-sm font-medium">
+													{t("providers.custom.waitForUsage")}
+												</label>
+												<p className="text-muted-foreground text-sm">{t("providers.custom.waitForUsageHelp")}</p>
+											</div>
+											<Switch
+												id="wait-for-usage"
+												size="md"
+												checked={field.value}
+												onCheckedChange={field.onChange}
+												disabled={!hasProviderCreateAccess}
+												data-testid="custom-provider-wait-for-usage-switch"
 											/>
 										</div>
 									</FormItem>
@@ -269,10 +348,10 @@ export function AddCustomProviderSheetContent({ show = true, onClose, onSave }: 
 					</div>
 					<div className="bg-card sticky bottom-0 ml-auto flex w-full flex-row gap-2 border-t px-4 py-4 md:px-8">
 						<Button type="button" variant="outline" onClick={onClose} className="ml-auto" data-testid="custom-provider-cancel-btn">
-							{t("common.cancel")}
+							{tc("cancel")}
 						</Button>
 						<Button type="submit" isLoading={isAddingProvider} disabled={!hasProviderCreateAccess} data-testid="custom-provider-save-btn">
-							{t("common.add")}
+							{tc("create")}
 						</Button>
 					</div>
 				</form>

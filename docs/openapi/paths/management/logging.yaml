@@ -1,6 +1,15 @@
 logs:
   get:
     operationId: getLogs
+    x-mint:
+      content: |
+        **Required Permissions**
+
+        | Permission | Granted via |
+        | --- | --- |
+        | `Logs:View` | RBAC role or API key scope |
+
+        [How permissions work](/api/procuring-api-keys#required-permissions)
     summary: Get logs
     description: |
       Retrieves logs with filtering, search, and pagination via query parameters.
@@ -37,7 +46,8 @@ logs:
         description: Comma-separated list of virtual key IDs to filter by
         schema:
           type: string
-      - $ref: '#/_histogram-parameters/project_ids'
+      - $ref: "#/_histogram-parameters/project_ids"
+      - $ref: "#/_histogram-parameters/topic_ids"
       - name: routing_rule_ids
         in: query
         description: Comma-separated list of routing rule IDs to filter by
@@ -45,7 +55,12 @@ logs:
           type: string
       - name: routing_engine_used
         in: query
-        description: Comma-separated list of routing engines to filter by (routing-rule, governance, or loadbalancing)
+        description: Comma-separated list of routing engines to filter by (governance, routing-rule, loadbalancing, model-catalog, circuit-breaker, session-affinity, core)
+        schema:
+          type: string
+      - name: tool_call_names
+        in: query
+        description: Comma-separated list of function names. Matches requests whose response called any of them, using the persisted tool_call_names metadata on the log row. Names are recorded even when content logging is disabled and stay on the row in hybrid storage mode; the call arguments are not.
         schema:
           type: string
       - name: complexity_tiers
@@ -55,7 +70,12 @@ logs:
           type: string
       - name: complexity_mechanisms
         in: query
-        description: Comma-separated list of complexity decision mechanisms to filter by (semantic, llm, session, or skipped)
+        description: Comma-separated list of complexity decision mechanisms to filter by (semantic, decision, llm, session, or skipped)
+        schema:
+          type: string
+      - name: model_router_ids
+        in: query
+        description: Comma-separated list of model router IDs. Matches requests a model router took.
         schema:
           type: string
       - name: session_id
@@ -75,6 +95,8 @@ logs:
         schema:
           type: string
           format: date-time
+      - $ref: "#/_histogram-parameters/period"
+      - $ref: "#/_histogram-parameters/timezone"
       - name: min_latency
         in: query
         description: Minimum latency filter
@@ -110,6 +132,20 @@ logs:
         description: Only show logs with missing cost
         schema:
           type: boolean
+      - $ref: "#/_histogram-parameters/aliases"
+      - $ref: "#/_histogram-parameters/parent_request_id"
+      - $ref: "#/_histogram-parameters/team_ids"
+      - $ref: "#/_histogram-parameters/customer_ids"
+      - $ref: "#/_histogram-parameters/user_ids"
+      - $ref: "#/_histogram-parameters/business_unit_ids"
+      - $ref: "#/_histogram-parameters/stop_reasons"
+      - $ref: "#/_histogram-parameters/user_agents"
+      - $ref: "#/_histogram-parameters/apps"
+      - $ref: "#/_histogram-parameters/agent_names"
+      - $ref: "#/_histogram-parameters/agent_correlation_id"
+      - $ref: "#/_histogram-parameters/cache_hit_types"
+      - $ref: "#/_histogram-parameters/guardrail_outcomes"
+      - $ref: "#/_histogram-parameters/metadata_key"
       - name: content_search
         in: query
         description: Search in request/response content
@@ -120,6 +156,18 @@ logs:
         description: "Exact lookup on a log ID (which is the request ID). Takes precedence over the time range — start_time/end_time/period are ignored when it is set. roots_only is ignored too, so an ID naming a fallback child returns that child rather than collapsing it into its root."
         schema:
           type: string
+      - name: roots_only
+        in: query
+        description: "Hide rows whose parent_request_id points at another row matching the same filters, so each fallback chain lists as its root request. The root carries child_count, children_cost and children_tokens for the rows it hides. Ignored when parent_request_id or request_id is set."
+        schema:
+          type: boolean
+          default: false
+      - name: group_sessions
+        in: query
+        description: "Collapse every row sharing a session_id onto that session's earliest root request, which carries session_child_count, session_total_cost and session_total_tokens. Requires roots_only=true, and is ignored when session_id, parent_request_id or request_id is set. Sorting orders the collapsed rows by the root row's own value, not by the session total."
+        schema:
+          type: boolean
+          default: false
       - name: limit
         in: query
         description: Number of logs to return (default 50, max 1000)
@@ -149,6 +197,7 @@ logs:
           default: desc
     security:
       - ManagementBearerAuth: []
+      - BasicAuth: []
     responses:
       "200":
         description: Successful response
@@ -163,8 +212,18 @@ logs:
 
   delete:
     operationId: deleteLogs
+    x-mint:
+      content: |
+        **Required Permissions**
+
+        | Permission | Granted via |
+        | --- | --- |
+        | `Logs:Delete` | RBAC role or API key scope |
+
+        [How permissions work](/api/procuring-api-keys#required-permissions)
     summary: Delete logs
-    description: Deletes logs by their IDs.
+    description: |
+      Deletes logs by their IDs.
     tags:
       - Logging
     requestBody:
@@ -175,6 +234,7 @@ logs:
             $ref: "../../schemas/management/logging.yaml#/DeleteLogsRequest"
     security:
       - ManagementBearerAuth: []
+      - BasicAuth: []
     responses:
       "200":
         description: Logs deleted successfully
@@ -190,8 +250,18 @@ logs:
 logs-stats:
   get:
     operationId: getLogsStats
+    x-mint:
+      content: |
+        **Required Permissions**
+
+        | Permission | Granted via |
+        | --- | --- |
+        | `Dashboard:View` | RBAC role or API key scope |
+
+        [How permissions work](/api/procuring-api-keys#required-permissions)
     summary: Get log statistics
-    description: Returns statistics for logs matching the specified filters.
+    description: |
+      Returns statistics for logs matching the specified filters.
     tags:
       - Logging
     parameters:
@@ -225,7 +295,8 @@ logs-stats:
         description: Comma-separated list of virtual key IDs to filter by
         schema:
           type: string
-      - $ref: '#/_histogram-parameters/project_ids'
+      - $ref: "#/_histogram-parameters/project_ids"
+      - $ref: "#/_histogram-parameters/topic_ids"
       - name: routing_rule_ids
         in: query
         description: Comma-separated list of routing rule IDs to filter by
@@ -233,7 +304,12 @@ logs-stats:
           type: string
       - name: routing_engine_used
         in: query
-        description: Comma-separated list of routing engines to filter by (routing-rule, governance, or loadbalancing)
+        description: Comma-separated list of routing engines to filter by (governance, routing-rule, loadbalancing, model-catalog, circuit-breaker, session-affinity, core)
+        schema:
+          type: string
+      - name: tool_call_names
+        in: query
+        description: Comma-separated list of function names. Matches requests whose response called any of them, using the persisted tool_call_names metadata on the log row. Names are recorded even when content logging is disabled and stay on the row in hybrid storage mode; the call arguments are not.
         schema:
           type: string
       - name: complexity_tiers
@@ -243,7 +319,12 @@ logs-stats:
           type: string
       - name: complexity_mechanisms
         in: query
-        description: Comma-separated list of complexity decision mechanisms to filter by (semantic, llm, session, or skipped)
+        description: Comma-separated list of complexity decision mechanisms to filter by (semantic, decision, llm, session, or skipped)
+        schema:
+          type: string
+      - name: model_router_ids
+        in: query
+        description: Comma-separated list of model router IDs. Matches requests a model router took.
         schema:
           type: string
       - name: session_id
@@ -263,6 +344,8 @@ logs-stats:
         schema:
           type: string
           format: date-time
+      - $ref: "#/_histogram-parameters/period"
+      - $ref: "#/_histogram-parameters/timezone"
       - name: min_latency
         in: query
         description: Minimum latency filter
@@ -298,6 +381,20 @@ logs-stats:
         description: Only show logs with missing cost
         schema:
           type: boolean
+      - $ref: "#/_histogram-parameters/aliases"
+      - $ref: "#/_histogram-parameters/parent_request_id"
+      - $ref: "#/_histogram-parameters/team_ids"
+      - $ref: "#/_histogram-parameters/customer_ids"
+      - $ref: "#/_histogram-parameters/user_ids"
+      - $ref: "#/_histogram-parameters/business_unit_ids"
+      - $ref: "#/_histogram-parameters/stop_reasons"
+      - $ref: "#/_histogram-parameters/user_agents"
+      - $ref: "#/_histogram-parameters/apps"
+      - $ref: "#/_histogram-parameters/agent_names"
+      - $ref: "#/_histogram-parameters/agent_correlation_id"
+      - $ref: "#/_histogram-parameters/cache_hit_types"
+      - $ref: "#/_histogram-parameters/guardrail_outcomes"
+      - $ref: "#/_histogram-parameters/metadata_key"
       - name: content_search
         in: query
         description: Search in request/response content
@@ -323,6 +420,7 @@ logs-stats:
           default: false
     security:
       - ManagementBearerAuth: []
+      - BasicAuth: []
     responses:
       "200":
         description: Successful response
@@ -338,12 +436,23 @@ logs-stats:
 logs-dropped:
   get:
     operationId: getDroppedRequests
+    x-mint:
+      content: |
+        **Required Permissions**
+
+        | Permission | Granted via |
+        | --- | --- |
+        | `Logs:View` | RBAC role or API key scope |
+
+        [How permissions work](/api/procuring-api-keys#required-permissions)
     summary: Get dropped requests count
-    description: Returns the number of dropped requests.
+    description: |
+      Returns the number of dropped requests.
     tags:
       - Logging
     security:
       - ManagementBearerAuth: []
+      - BasicAuth: []
     responses:
       "200":
         description: Successful response
@@ -355,12 +464,43 @@ logs-dropped:
 logs-filterdata:
   get:
     operationId: getAvailableFilterData
+    x-mint:
+      content: |
+        **Required Permissions**
+
+        | Permission | Granted via |
+        | --- | --- |
+        | `Logs:View` | RBAC role or API key scope |
+
+        [How permissions work](/api/procuring-api-keys#required-permissions)
     summary: Get available filter data
-    description: Returns all unique filter data from logs (models, keys, virtual keys).
+    description: >-
+      Returns the distinct values each filter dimension offers, drawn from the
+      logs of roughly the last month.
     tags:
       - Logging
+    parameters:
+      - name: dimensions
+        in: query
+        description: >-
+          Comma-separated dimensions to return. One or more of `models`,
+          `aliases`, `selected_keys`, `virtual_keys`, `routing_rules`,
+          `routing_engines`, `stop_reasons`, `tool_call_names`, `apps`, `user_agents`,
+          `teams`, `customers`, `users`, `business_units`, `projects`, `topics`, `metadata_keys`.
+          Unrecognised values are ignored, and asking for none returns every
+          dimension.
+        schema:
+          type: string
+      - name: q
+        in: query
+        description: >-
+          Free-text search within the requested dimensions. Passing it bypasses
+          the response cache.
+        schema:
+          type: string
     security:
       - ManagementBearerAuth: []
+      - BasicAuth: []
     responses:
       "200":
         description: Successful response
@@ -374,8 +514,18 @@ logs-filterdata:
 logs-by-id:
   get:
     operationId: getLogById
+    x-mint:
+      content: |
+        **Required Permissions**
+
+        | Permission | Granted via |
+        | --- | --- |
+        | `Logs:View` | RBAC role or API key scope |
+
+        [How permissions work](/api/procuring-api-keys#required-permissions)
     summary: Get a single log entry
-    description: Retrieves a single log entry by its ID.
+    description: |
+      Retrieves a single log entry by its ID.
     tags:
       - Logging
     parameters:
@@ -385,8 +535,19 @@ logs-by-id:
         description: Log entry ID
         schema:
           type: string
+      - name: timestamp
+        in: query
+        required: false
+        description: |
+          The log entry's `timestamp` as returned by `GET /api/logs`, in RFC 3339 format. Optional:
+          the ClickHouse log store uses it to look the entry up without scanning every partition,
+          and still finds the entry by ID alone when the timestamp does not match. Other log stores ignore it.
+        schema:
+          type: string
+          format: date-time
     security:
       - ManagementBearerAuth: []
+      - BasicAuth: []
     responses:
       "200":
         description: Successful response
@@ -394,8 +555,180 @@ logs-by-id:
           application/json:
             schema:
               $ref: "../../schemas/management/logging.yaml#/LogEntry"
+      "400":
+        $ref: "../../openapi.yaml#/components/responses/BadRequest"
       "404":
         description: Log not found
+        content:
+          application/json:
+            schema:
+              $ref: "../../schemas/inference/common.yaml#/BifrostError"
+      "500":
+        $ref: "../../openapi.yaml#/components/responses/InternalError"
+
+logs-search:
+  get:
+    operationId: searchLogs
+    x-mint:
+      content: |
+        **Required Permissions**
+
+        | Permission | Granted via |
+        | --- | --- |
+        | `Logs:View` | RBAC role or API key scope |
+
+        [How permissions work](/api/procuring-api-keys#required-permissions)
+    summary: Search logged conversations by meaning
+    description: |
+      Finds logged conversations whose content means something close to a
+      query, such as "users asking for a refund", using the embedding index
+      Warp keeps of your logs. Use it for topics, complaints and intents that
+      no exact filter captures; for an exact phrase, `getLogs` with
+      `content_search` is cheaper.
+
+      Pass up to 5 phrasings of the same idea as repeated `query` parameters:
+      each is embedded and searched, and a log scores by its best match across
+      them, so varied wording raises recall. Each call costs one embedding
+      request per phrasing.
+
+      The other parameters are the log filters search by meaning can apply:
+      time range, providers, models, status, virtual keys, users, teams,
+      customers, business units, apps, latency, cost, session and
+      `content_search`. Any other log filter is refused with 400 rather than
+      ignored. Every match is
+      reloaded through the log store, so a caller sees only the logs they may
+      see. Rows are a compact projection with a content preview; fetch a full
+      row with `getLogById`.
+
+      Scores are Warp similarity on a 0-1 scale, (1 + cosine) / 2, so 0.5 is
+      unrelated and 1 is identical. Only rows scoring at or above `threshold`
+      (Warp's configured threshold, on the same scale) are returned, and a
+      score does not by itself say a row is on topic: judge rows by their
+      content. An empty
+      result means nothing scored above the threshold, not that the topic never
+      came up; sample with `getLogs` before concluding that.
+
+      Requires Warp to be enabled with an embedding model, and its log index
+      to be filled. Otherwise the route returns 503.
+    tags:
+      - Logging
+    parameters:
+      - name: query
+        in: query
+        required: true
+        description: A phrasing of what to look for. Repeat the parameter for up to 5 phrasings.
+        style: form
+        explode: true
+        schema:
+          type: array
+          minItems: 1
+          maxItems: 5
+          items:
+            type: string
+            maxLength: 2000
+      - name: limit
+        in: query
+        description: Matches to return, at most 25. Defaults to, and is capped by, Warp's configured semantic search limit.
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 25
+      - $ref: "#/_histogram-parameters/providers"
+      - $ref: "#/_histogram-parameters/models"
+      - $ref: "#/_histogram-parameters/status"
+      - $ref: "#/_histogram-parameters/virtual_key_ids"
+      - $ref: "#/_histogram-parameters/team_ids"
+      - $ref: "#/_histogram-parameters/customer_ids"
+      - $ref: "#/_histogram-parameters/user_ids"
+      - $ref: "#/_histogram-parameters/business_unit_ids"
+      - $ref: "#/_histogram-parameters/start_time"
+      - $ref: "#/_histogram-parameters/end_time"
+      - $ref: "#/_histogram-parameters/period"
+      - $ref: "#/_histogram-parameters/timezone"
+      - $ref: "#/_histogram-parameters/min_latency"
+      - $ref: "#/_histogram-parameters/max_latency"
+      - $ref: "#/_histogram-parameters/min_cost"
+      - $ref: "#/_histogram-parameters/max_cost"
+      - $ref: "#/_histogram-parameters/apps"
+      - $ref: "#/_histogram-parameters/session_id"
+      - $ref: "#/_histogram-parameters/content_search"
+    security:
+      - ManagementBearerAuth: []
+      - BasicAuth: []
+    responses:
+      "200":
+        description: Successful response
+        content:
+          application/json:
+            schema:
+              $ref: "../../schemas/management/logging.yaml#/LogSearchResult"
+      "400":
+        description: No query, a query over 2000 characters, more than 5 queries, a limit outside 1-25, or a log filter search by meaning cannot apply
+        content:
+          application/json:
+            schema:
+              $ref: "../../schemas/inference/common.yaml#/BifrostError"
+      "503":
+        description: Semantic search is not available because Warp, its embedding model or its log index is not set up
+        content:
+          application/json:
+            schema:
+              $ref: "../../schemas/inference/common.yaml#/BifrostError"
+      "500":
+        $ref: "../../openapi.yaml#/components/responses/InternalError"
+
+logs-trace-by-id:
+  get:
+    operationId: getLogTrace
+    x-mint:
+      content: |
+        **Required Permissions**
+
+        | Permission | Granted via |
+        | --- | --- |
+        | `Logs:View` | RBAC role or API key scope |
+
+        [How permissions work](/api/procuring-api-keys#required-permissions)
+    summary: Get the causal trace of a request
+    description: |
+      Returns the causal chain behind one request: its retry attempts, its
+      complete fallback chain (every provider and model tried, in order, whether
+      each hop succeeded or failed and why), and each hop's guardrail and cache
+      decisions and latency breakdown.
+
+      Use it to explain why a specific request failed or behaved unexpectedly.
+      `getLogById` returns one row's content; this returns the causation around
+      it. The id can be the root request or any fallback hop: the full chain is
+      returned either way.
+
+      It explains one request. It cannot explain why an aggregate changed, such
+      as a spike in errors or a shift in latency; break the change down with
+      the rankings and histogram endpoints instead.
+
+      The chain is capped at 10 fallback hops, and each hop at 20 attempts,
+      guardrail decisions and log lines. When the chain is longer than the cap,
+      `truncated_chain` is true and `final_status` is omitted.
+    tags:
+      - Logging
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: ID of the request, or of any fallback hop in its chain
+        schema:
+          type: string
+    security:
+      - ManagementBearerAuth: []
+      - BasicAuth: []
+    responses:
+      "200":
+        description: Successful response
+        content:
+          application/json:
+            schema:
+              $ref: "../../schemas/management/logging.yaml#/RequestTrace"
+      "404":
+        description: The request, or the root of its chain, was not found or is not visible to the caller
         content:
           application/json:
             schema:
@@ -406,6 +739,15 @@ logs-by-id:
 logs-histogram:
   get:
     operationId: getLogsHistogram
+    x-mint:
+      content: |
+        **Required Permissions**
+
+        | Permission | Granted via |
+        | --- | --- |
+        | `Dashboard:View` | RBAC role or API key scope |
+
+        [How permissions work](/api/procuring-api-keys#required-permissions)
     summary: Get request count histogram
     description: |
       Returns time-bucketed request counts. Bucket size is auto-calculated from the time range.
@@ -423,12 +765,15 @@ logs-histogram:
       - $ref: "#/_histogram-parameters/customer_ids"
       - $ref: "#/_histogram-parameters/user_ids"
       - $ref: "#/_histogram-parameters/business_unit_ids"
-      - $ref: '#/_histogram-parameters/project_ids'
+      - $ref: "#/_histogram-parameters/project_ids"
+      - $ref: "#/_histogram-parameters/topic_ids"
       - $ref: "#/_histogram-parameters/routing_rule_ids"
+      - $ref: "#/_histogram-parameters/model_router_ids"
       - $ref: "#/_histogram-parameters/routing_engine_used"
       - $ref: "#/_histogram-parameters/start_time"
       - $ref: "#/_histogram-parameters/end_time"
       - $ref: "#/_histogram-parameters/period"
+      - $ref: "#/_histogram-parameters/timezone"
       - $ref: "#/_histogram-parameters/min_latency"
       - $ref: "#/_histogram-parameters/max_latency"
       - $ref: "#/_histogram-parameters/min_tokens"
@@ -437,13 +782,23 @@ logs-histogram:
       - $ref: "#/_histogram-parameters/max_cost"
       - $ref: "#/_histogram-parameters/missing_cost_only"
       - $ref: "#/_histogram-parameters/stop_reasons"
+      - $ref: "#/_histogram-parameters/tool_call_names"
       - $ref: "#/_histogram-parameters/cache_hit_types"
       - $ref: "#/_histogram-parameters/parent_request_id"
+      - $ref: "#/_histogram-parameters/user_agents"
+      - $ref: "#/_histogram-parameters/apps"
+      - $ref: "#/_histogram-parameters/agent_names"
+      - $ref: "#/_histogram-parameters/session_id"
+      - $ref: "#/_histogram-parameters/agent_correlation_id"
+      - $ref: "#/_histogram-parameters/complexity_tiers"
+      - $ref: "#/_histogram-parameters/complexity_mechanisms"
+      - $ref: "#/_histogram-parameters/guardrail_outcomes"
       - $ref: "#/_histogram-parameters/metadata_key"
       - $ref: "#/_histogram-parameters/content_search"
       - $ref: "#/_histogram-parameters/request_id"
     security:
       - ManagementBearerAuth: []
+      - BasicAuth: []
     responses:
       "200":
         description: Successful response
@@ -459,8 +814,18 @@ logs-histogram:
 logs-histogram-tokens:
   get:
     operationId: getLogsTokenHistogram
+    x-mint:
+      content: |
+        **Required Permissions**
+
+        | Permission | Granted via |
+        | --- | --- |
+        | `Dashboard:View` | RBAC role or API key scope |
+
+        [How permissions work](/api/procuring-api-keys#required-permissions)
     summary: Get token usage histogram
-    description: Returns time-bucketed token usage (prompt, completion, total).
+    description: |
+      Returns time-bucketed token usage (prompt, completion, total).
     tags:
       - Logging
     parameters:
@@ -470,11 +835,15 @@ logs-histogram-tokens:
       - $ref: "#/_histogram-parameters/objects"
       - $ref: "#/_histogram-parameters/selected_key_ids"
       - $ref: "#/_histogram-parameters/virtual_key_ids"
-      - $ref: '#/_histogram-parameters/project_ids'
+      - $ref: "#/_histogram-parameters/project_ids"
+      - $ref: "#/_histogram-parameters/topic_ids"
       - $ref: "#/_histogram-parameters/routing_rule_ids"
+      - $ref: "#/_histogram-parameters/model_router_ids"
       - $ref: "#/_histogram-parameters/routing_engine_used"
       - $ref: "#/_histogram-parameters/start_time"
       - $ref: "#/_histogram-parameters/end_time"
+      - $ref: "#/_histogram-parameters/period"
+      - $ref: "#/_histogram-parameters/timezone"
       - $ref: "#/_histogram-parameters/min_latency"
       - $ref: "#/_histogram-parameters/max_latency"
       - $ref: "#/_histogram-parameters/min_tokens"
@@ -482,10 +851,29 @@ logs-histogram-tokens:
       - $ref: "#/_histogram-parameters/min_cost"
       - $ref: "#/_histogram-parameters/max_cost"
       - $ref: "#/_histogram-parameters/missing_cost_only"
+      - $ref: "#/_histogram-parameters/aliases"
+      - $ref: "#/_histogram-parameters/parent_request_id"
+      - $ref: "#/_histogram-parameters/team_ids"
+      - $ref: "#/_histogram-parameters/customer_ids"
+      - $ref: "#/_histogram-parameters/user_ids"
+      - $ref: "#/_histogram-parameters/business_unit_ids"
+      - $ref: "#/_histogram-parameters/stop_reasons"
+      - $ref: "#/_histogram-parameters/tool_call_names"
+      - $ref: "#/_histogram-parameters/user_agents"
+      - $ref: "#/_histogram-parameters/apps"
+      - $ref: "#/_histogram-parameters/agent_names"
+      - $ref: "#/_histogram-parameters/session_id"
+      - $ref: "#/_histogram-parameters/agent_correlation_id"
+      - $ref: "#/_histogram-parameters/complexity_tiers"
+      - $ref: "#/_histogram-parameters/complexity_mechanisms"
+      - $ref: "#/_histogram-parameters/cache_hit_types"
+      - $ref: "#/_histogram-parameters/guardrail_outcomes"
+      - $ref: "#/_histogram-parameters/metadata_key"
       - $ref: "#/_histogram-parameters/content_search"
       - $ref: "#/_histogram-parameters/request_id"
     security:
       - ManagementBearerAuth: []
+      - BasicAuth: []
     responses:
       "200":
         description: Successful response
@@ -501,8 +889,18 @@ logs-histogram-tokens:
 logs-histogram-cost:
   get:
     operationId: getLogsCostHistogram
+    x-mint:
+      content: |
+        **Required Permissions**
+
+        | Permission | Granted via |
+        | --- | --- |
+        | `Dashboard:View` | RBAC role or API key scope |
+
+        [How permissions work](/api/procuring-api-keys#required-permissions)
     summary: Get cost histogram
-    description: Returns time-bucketed cost data with model breakdown.
+    description: |
+      Returns time-bucketed cost data with model breakdown.
     tags:
       - Logging
     parameters:
@@ -512,11 +910,15 @@ logs-histogram-cost:
       - $ref: "#/_histogram-parameters/objects"
       - $ref: "#/_histogram-parameters/selected_key_ids"
       - $ref: "#/_histogram-parameters/virtual_key_ids"
-      - $ref: '#/_histogram-parameters/project_ids'
+      - $ref: "#/_histogram-parameters/project_ids"
+      - $ref: "#/_histogram-parameters/topic_ids"
       - $ref: "#/_histogram-parameters/routing_rule_ids"
+      - $ref: "#/_histogram-parameters/model_router_ids"
       - $ref: "#/_histogram-parameters/routing_engine_used"
       - $ref: "#/_histogram-parameters/start_time"
       - $ref: "#/_histogram-parameters/end_time"
+      - $ref: "#/_histogram-parameters/period"
+      - $ref: "#/_histogram-parameters/timezone"
       - $ref: "#/_histogram-parameters/min_latency"
       - $ref: "#/_histogram-parameters/max_latency"
       - $ref: "#/_histogram-parameters/min_tokens"
@@ -524,10 +926,35 @@ logs-histogram-cost:
       - $ref: "#/_histogram-parameters/min_cost"
       - $ref: "#/_histogram-parameters/max_cost"
       - $ref: "#/_histogram-parameters/missing_cost_only"
+      - $ref: "#/_histogram-parameters/aliases"
+      - $ref: "#/_histogram-parameters/parent_request_id"
+      - $ref: "#/_histogram-parameters/team_ids"
+      - $ref: "#/_histogram-parameters/customer_ids"
+      - $ref: "#/_histogram-parameters/user_ids"
+      - $ref: "#/_histogram-parameters/business_unit_ids"
+      - $ref: "#/_histogram-parameters/stop_reasons"
+      - $ref: "#/_histogram-parameters/tool_call_names"
+      - $ref: "#/_histogram-parameters/user_agents"
+      - $ref: "#/_histogram-parameters/apps"
+      - $ref: "#/_histogram-parameters/agent_names"
+      - $ref: "#/_histogram-parameters/session_id"
+      - $ref: "#/_histogram-parameters/agent_correlation_id"
+      - $ref: "#/_histogram-parameters/complexity_tiers"
+      - $ref: "#/_histogram-parameters/complexity_mechanisms"
+      - $ref: "#/_histogram-parameters/cache_hit_types"
+      - $ref: "#/_histogram-parameters/guardrail_outcomes"
+      - $ref: "#/_histogram-parameters/metadata_key"
       - $ref: "#/_histogram-parameters/content_search"
       - $ref: "#/_histogram-parameters/request_id"
+      - name: bucket_size
+        in: query
+        description: "Bucket width in seconds, overriding the width derived from the time range. Requires start_time and end_time (or period). Below an hour it must divide 3600; from an hour up it must be a whole number of hours, at most 31 days. The window may span at most 5000 buckets."
+        schema:
+          type: integer
+          minimum: 60
     security:
       - ManagementBearerAuth: []
+      - BasicAuth: []
     responses:
       "200":
         description: Successful response
@@ -543,8 +970,18 @@ logs-histogram-cost:
 logs-histogram-models:
   get:
     operationId: getLogsModelHistogram
+    x-mint:
+      content: |
+        **Required Permissions**
+
+        | Permission | Granted via |
+        | --- | --- |
+        | `Dashboard:View` | RBAC role or API key scope |
+
+        [How permissions work](/api/procuring-api-keys#required-permissions)
     summary: Get model usage histogram
-    description: Returns time-bucketed model usage with success/error breakdown.
+    description: |
+      Returns time-bucketed model usage with success/error breakdown.
     tags:
       - Logging
     parameters:
@@ -554,11 +991,15 @@ logs-histogram-models:
       - $ref: "#/_histogram-parameters/objects"
       - $ref: "#/_histogram-parameters/selected_key_ids"
       - $ref: "#/_histogram-parameters/virtual_key_ids"
-      - $ref: '#/_histogram-parameters/project_ids'
+      - $ref: "#/_histogram-parameters/project_ids"
+      - $ref: "#/_histogram-parameters/topic_ids"
       - $ref: "#/_histogram-parameters/routing_rule_ids"
+      - $ref: "#/_histogram-parameters/model_router_ids"
       - $ref: "#/_histogram-parameters/routing_engine_used"
       - $ref: "#/_histogram-parameters/start_time"
       - $ref: "#/_histogram-parameters/end_time"
+      - $ref: "#/_histogram-parameters/period"
+      - $ref: "#/_histogram-parameters/timezone"
       - $ref: "#/_histogram-parameters/min_latency"
       - $ref: "#/_histogram-parameters/max_latency"
       - $ref: "#/_histogram-parameters/min_tokens"
@@ -566,10 +1007,29 @@ logs-histogram-models:
       - $ref: "#/_histogram-parameters/min_cost"
       - $ref: "#/_histogram-parameters/max_cost"
       - $ref: "#/_histogram-parameters/missing_cost_only"
+      - $ref: "#/_histogram-parameters/aliases"
+      - $ref: "#/_histogram-parameters/parent_request_id"
+      - $ref: "#/_histogram-parameters/team_ids"
+      - $ref: "#/_histogram-parameters/customer_ids"
+      - $ref: "#/_histogram-parameters/user_ids"
+      - $ref: "#/_histogram-parameters/business_unit_ids"
+      - $ref: "#/_histogram-parameters/stop_reasons"
+      - $ref: "#/_histogram-parameters/tool_call_names"
+      - $ref: "#/_histogram-parameters/user_agents"
+      - $ref: "#/_histogram-parameters/apps"
+      - $ref: "#/_histogram-parameters/agent_names"
+      - $ref: "#/_histogram-parameters/session_id"
+      - $ref: "#/_histogram-parameters/agent_correlation_id"
+      - $ref: "#/_histogram-parameters/complexity_tiers"
+      - $ref: "#/_histogram-parameters/complexity_mechanisms"
+      - $ref: "#/_histogram-parameters/cache_hit_types"
+      - $ref: "#/_histogram-parameters/guardrail_outcomes"
+      - $ref: "#/_histogram-parameters/metadata_key"
       - $ref: "#/_histogram-parameters/content_search"
       - $ref: "#/_histogram-parameters/request_id"
     security:
       - ManagementBearerAuth: []
+      - BasicAuth: []
     responses:
       "200":
         description: Successful response
@@ -585,8 +1045,18 @@ logs-histogram-models:
 logs-histogram-latency:
   get:
     operationId: getLogsLatencyHistogram
+    x-mint:
+      content: |
+        **Required Permissions**
+
+        | Permission | Granted via |
+        | --- | --- |
+        | `Dashboard:View` | RBAC role or API key scope |
+
+        [How permissions work](/api/procuring-api-keys#required-permissions)
     summary: Get latency histogram
-    description: Returns time-bucketed latency percentiles (avg, p90, p95, p99).
+    description: |
+      Returns time-bucketed latency percentiles (avg, p90, p95, p99).
     tags:
       - Logging
     parameters:
@@ -596,11 +1066,15 @@ logs-histogram-latency:
       - $ref: "#/_histogram-parameters/objects"
       - $ref: "#/_histogram-parameters/selected_key_ids"
       - $ref: "#/_histogram-parameters/virtual_key_ids"
-      - $ref: '#/_histogram-parameters/project_ids'
+      - $ref: "#/_histogram-parameters/project_ids"
+      - $ref: "#/_histogram-parameters/topic_ids"
       - $ref: "#/_histogram-parameters/routing_rule_ids"
+      - $ref: "#/_histogram-parameters/model_router_ids"
       - $ref: "#/_histogram-parameters/routing_engine_used"
       - $ref: "#/_histogram-parameters/start_time"
       - $ref: "#/_histogram-parameters/end_time"
+      - $ref: "#/_histogram-parameters/period"
+      - $ref: "#/_histogram-parameters/timezone"
       - $ref: "#/_histogram-parameters/min_latency"
       - $ref: "#/_histogram-parameters/max_latency"
       - $ref: "#/_histogram-parameters/min_tokens"
@@ -608,10 +1082,29 @@ logs-histogram-latency:
       - $ref: "#/_histogram-parameters/min_cost"
       - $ref: "#/_histogram-parameters/max_cost"
       - $ref: "#/_histogram-parameters/missing_cost_only"
+      - $ref: "#/_histogram-parameters/aliases"
+      - $ref: "#/_histogram-parameters/parent_request_id"
+      - $ref: "#/_histogram-parameters/team_ids"
+      - $ref: "#/_histogram-parameters/customer_ids"
+      - $ref: "#/_histogram-parameters/user_ids"
+      - $ref: "#/_histogram-parameters/business_unit_ids"
+      - $ref: "#/_histogram-parameters/stop_reasons"
+      - $ref: "#/_histogram-parameters/tool_call_names"
+      - $ref: "#/_histogram-parameters/user_agents"
+      - $ref: "#/_histogram-parameters/apps"
+      - $ref: "#/_histogram-parameters/agent_names"
+      - $ref: "#/_histogram-parameters/session_id"
+      - $ref: "#/_histogram-parameters/agent_correlation_id"
+      - $ref: "#/_histogram-parameters/complexity_tiers"
+      - $ref: "#/_histogram-parameters/complexity_mechanisms"
+      - $ref: "#/_histogram-parameters/cache_hit_types"
+      - $ref: "#/_histogram-parameters/guardrail_outcomes"
+      - $ref: "#/_histogram-parameters/metadata_key"
       - $ref: "#/_histogram-parameters/content_search"
       - $ref: "#/_histogram-parameters/request_id"
     security:
       - ManagementBearerAuth: []
+      - BasicAuth: []
     responses:
       "200":
         description: Successful response
@@ -627,8 +1120,18 @@ logs-histogram-latency:
 logs-histogram-cost-by-provider:
   get:
     operationId: getLogsProviderCostHistogram
+    x-mint:
+      content: |
+        **Required Permissions**
+
+        | Permission | Granted via |
+        | --- | --- |
+        | `Dashboard:View` | RBAC role or API key scope |
+
+        [How permissions work](/api/procuring-api-keys#required-permissions)
     summary: Get cost histogram by provider
-    description: Returns time-bucketed cost data with provider breakdown.
+    description: |
+      Returns time-bucketed cost data with provider breakdown.
     tags:
       - Logging
     parameters:
@@ -638,11 +1141,15 @@ logs-histogram-cost-by-provider:
       - $ref: "#/_histogram-parameters/objects"
       - $ref: "#/_histogram-parameters/selected_key_ids"
       - $ref: "#/_histogram-parameters/virtual_key_ids"
-      - $ref: '#/_histogram-parameters/project_ids'
+      - $ref: "#/_histogram-parameters/project_ids"
+      - $ref: "#/_histogram-parameters/topic_ids"
       - $ref: "#/_histogram-parameters/routing_rule_ids"
+      - $ref: "#/_histogram-parameters/model_router_ids"
       - $ref: "#/_histogram-parameters/routing_engine_used"
       - $ref: "#/_histogram-parameters/start_time"
       - $ref: "#/_histogram-parameters/end_time"
+      - $ref: "#/_histogram-parameters/period"
+      - $ref: "#/_histogram-parameters/timezone"
       - $ref: "#/_histogram-parameters/min_latency"
       - $ref: "#/_histogram-parameters/max_latency"
       - $ref: "#/_histogram-parameters/min_tokens"
@@ -650,10 +1157,29 @@ logs-histogram-cost-by-provider:
       - $ref: "#/_histogram-parameters/min_cost"
       - $ref: "#/_histogram-parameters/max_cost"
       - $ref: "#/_histogram-parameters/missing_cost_only"
+      - $ref: "#/_histogram-parameters/aliases"
+      - $ref: "#/_histogram-parameters/parent_request_id"
+      - $ref: "#/_histogram-parameters/team_ids"
+      - $ref: "#/_histogram-parameters/customer_ids"
+      - $ref: "#/_histogram-parameters/user_ids"
+      - $ref: "#/_histogram-parameters/business_unit_ids"
+      - $ref: "#/_histogram-parameters/stop_reasons"
+      - $ref: "#/_histogram-parameters/tool_call_names"
+      - $ref: "#/_histogram-parameters/user_agents"
+      - $ref: "#/_histogram-parameters/apps"
+      - $ref: "#/_histogram-parameters/agent_names"
+      - $ref: "#/_histogram-parameters/session_id"
+      - $ref: "#/_histogram-parameters/agent_correlation_id"
+      - $ref: "#/_histogram-parameters/complexity_tiers"
+      - $ref: "#/_histogram-parameters/complexity_mechanisms"
+      - $ref: "#/_histogram-parameters/cache_hit_types"
+      - $ref: "#/_histogram-parameters/guardrail_outcomes"
+      - $ref: "#/_histogram-parameters/metadata_key"
       - $ref: "#/_histogram-parameters/content_search"
       - $ref: "#/_histogram-parameters/request_id"
     security:
       - ManagementBearerAuth: []
+      - BasicAuth: []
     responses:
       "200":
         description: Successful response
@@ -669,8 +1195,18 @@ logs-histogram-cost-by-provider:
 logs-histogram-tokens-by-provider:
   get:
     operationId: getLogsProviderTokenHistogram
+    x-mint:
+      content: |
+        **Required Permissions**
+
+        | Permission | Granted via |
+        | --- | --- |
+        | `Dashboard:View` | RBAC role or API key scope |
+
+        [How permissions work](/api/procuring-api-keys#required-permissions)
     summary: Get token histogram by provider
-    description: Returns time-bucketed token usage with provider breakdown.
+    description: |
+      Returns time-bucketed token usage with provider breakdown.
     tags:
       - Logging
     parameters:
@@ -680,11 +1216,15 @@ logs-histogram-tokens-by-provider:
       - $ref: "#/_histogram-parameters/objects"
       - $ref: "#/_histogram-parameters/selected_key_ids"
       - $ref: "#/_histogram-parameters/virtual_key_ids"
-      - $ref: '#/_histogram-parameters/project_ids'
+      - $ref: "#/_histogram-parameters/project_ids"
+      - $ref: "#/_histogram-parameters/topic_ids"
       - $ref: "#/_histogram-parameters/routing_rule_ids"
+      - $ref: "#/_histogram-parameters/model_router_ids"
       - $ref: "#/_histogram-parameters/routing_engine_used"
       - $ref: "#/_histogram-parameters/start_time"
       - $ref: "#/_histogram-parameters/end_time"
+      - $ref: "#/_histogram-parameters/period"
+      - $ref: "#/_histogram-parameters/timezone"
       - $ref: "#/_histogram-parameters/min_latency"
       - $ref: "#/_histogram-parameters/max_latency"
       - $ref: "#/_histogram-parameters/min_tokens"
@@ -692,10 +1232,29 @@ logs-histogram-tokens-by-provider:
       - $ref: "#/_histogram-parameters/min_cost"
       - $ref: "#/_histogram-parameters/max_cost"
       - $ref: "#/_histogram-parameters/missing_cost_only"
+      - $ref: "#/_histogram-parameters/aliases"
+      - $ref: "#/_histogram-parameters/parent_request_id"
+      - $ref: "#/_histogram-parameters/team_ids"
+      - $ref: "#/_histogram-parameters/customer_ids"
+      - $ref: "#/_histogram-parameters/user_ids"
+      - $ref: "#/_histogram-parameters/business_unit_ids"
+      - $ref: "#/_histogram-parameters/stop_reasons"
+      - $ref: "#/_histogram-parameters/tool_call_names"
+      - $ref: "#/_histogram-parameters/user_agents"
+      - $ref: "#/_histogram-parameters/apps"
+      - $ref: "#/_histogram-parameters/agent_names"
+      - $ref: "#/_histogram-parameters/session_id"
+      - $ref: "#/_histogram-parameters/agent_correlation_id"
+      - $ref: "#/_histogram-parameters/complexity_tiers"
+      - $ref: "#/_histogram-parameters/complexity_mechanisms"
+      - $ref: "#/_histogram-parameters/cache_hit_types"
+      - $ref: "#/_histogram-parameters/guardrail_outcomes"
+      - $ref: "#/_histogram-parameters/metadata_key"
       - $ref: "#/_histogram-parameters/content_search"
       - $ref: "#/_histogram-parameters/request_id"
     security:
       - ManagementBearerAuth: []
+      - BasicAuth: []
     responses:
       "200":
         description: Successful response
@@ -711,8 +1270,18 @@ logs-histogram-tokens-by-provider:
 logs-histogram-latency-by-provider:
   get:
     operationId: getLogsProviderLatencyHistogram
+    x-mint:
+      content: |
+        **Required Permissions**
+
+        | Permission | Granted via |
+        | --- | --- |
+        | `Dashboard:View` | RBAC role or API key scope |
+
+        [How permissions work](/api/procuring-api-keys#required-permissions)
     summary: Get latency histogram by provider
-    description: Returns time-bucketed latency percentiles with provider breakdown.
+    description: |
+      Returns time-bucketed latency percentiles with provider breakdown.
     tags:
       - Logging
     parameters:
@@ -722,11 +1291,15 @@ logs-histogram-latency-by-provider:
       - $ref: "#/_histogram-parameters/objects"
       - $ref: "#/_histogram-parameters/selected_key_ids"
       - $ref: "#/_histogram-parameters/virtual_key_ids"
-      - $ref: '#/_histogram-parameters/project_ids'
+      - $ref: "#/_histogram-parameters/project_ids"
+      - $ref: "#/_histogram-parameters/topic_ids"
       - $ref: "#/_histogram-parameters/routing_rule_ids"
+      - $ref: "#/_histogram-parameters/model_router_ids"
       - $ref: "#/_histogram-parameters/routing_engine_used"
       - $ref: "#/_histogram-parameters/start_time"
       - $ref: "#/_histogram-parameters/end_time"
+      - $ref: "#/_histogram-parameters/period"
+      - $ref: "#/_histogram-parameters/timezone"
       - $ref: "#/_histogram-parameters/min_latency"
       - $ref: "#/_histogram-parameters/max_latency"
       - $ref: "#/_histogram-parameters/min_tokens"
@@ -734,6 +1307,100 @@ logs-histogram-latency-by-provider:
       - $ref: "#/_histogram-parameters/min_cost"
       - $ref: "#/_histogram-parameters/max_cost"
       - $ref: "#/_histogram-parameters/missing_cost_only"
+      - $ref: "#/_histogram-parameters/aliases"
+      - $ref: "#/_histogram-parameters/parent_request_id"
+      - $ref: "#/_histogram-parameters/team_ids"
+      - $ref: "#/_histogram-parameters/customer_ids"
+      - $ref: "#/_histogram-parameters/user_ids"
+      - $ref: "#/_histogram-parameters/business_unit_ids"
+      - $ref: "#/_histogram-parameters/stop_reasons"
+      - $ref: "#/_histogram-parameters/tool_call_names"
+      - $ref: "#/_histogram-parameters/user_agents"
+      - $ref: "#/_histogram-parameters/apps"
+      - $ref: "#/_histogram-parameters/agent_names"
+      - $ref: "#/_histogram-parameters/session_id"
+      - $ref: "#/_histogram-parameters/agent_correlation_id"
+      - $ref: "#/_histogram-parameters/complexity_tiers"
+      - $ref: "#/_histogram-parameters/complexity_mechanisms"
+      - $ref: "#/_histogram-parameters/cache_hit_types"
+      - $ref: "#/_histogram-parameters/guardrail_outcomes"
+      - $ref: "#/_histogram-parameters/metadata_key"
+      - $ref: "#/_histogram-parameters/content_search"
+      - $ref: "#/_histogram-parameters/request_id"
+    security:
+      - ManagementBearerAuth: []
+      - BasicAuth: []
+    responses:
+      "200":
+        description: Successful response
+        content:
+          application/json:
+            schema:
+              $ref: "../../schemas/management/logging.yaml#/ProviderLatencyHistogramResult"
+      "400":
+        $ref: "../../openapi.yaml#/components/responses/BadRequest"
+      "500":
+        $ref: "../../openapi.yaml#/components/responses/InternalError"
+
+logs-histogram-throughput:
+  get:
+    operationId: getLogsThroughputHistogram
+    x-mint:
+      content: |
+        **Required Permissions**
+
+        | Permission | Granted via |
+        | --- | --- |
+        | `Dashboard:View` | RBAC role or API key scope |
+
+        [How permissions work](/api/procuring-api-keys#required-permissions)
+    summary: Get throughput histogram
+    description: >-
+      Returns time-bucketed token-generation throughput in tokens per second.
+      The bucket size is derived from the requested window.
+    tags:
+      - Logging
+    parameters:
+      - $ref: "#/_histogram-parameters/providers"
+      - $ref: "#/_histogram-parameters/models"
+      - $ref: "#/_histogram-parameters/status"
+      - $ref: "#/_histogram-parameters/objects"
+      - $ref: "#/_histogram-parameters/selected_key_ids"
+      - $ref: "#/_histogram-parameters/virtual_key_ids"
+      - $ref: "#/_histogram-parameters/team_ids"
+      - $ref: "#/_histogram-parameters/customer_ids"
+      - $ref: "#/_histogram-parameters/user_ids"
+      - $ref: "#/_histogram-parameters/business_unit_ids"
+      - $ref: "#/_histogram-parameters/project_ids"
+      - $ref: "#/_histogram-parameters/topic_ids"
+      - $ref: "#/_histogram-parameters/routing_rule_ids"
+      - $ref: "#/_histogram-parameters/model_router_ids"
+      - $ref: "#/_histogram-parameters/routing_engine_used"
+      - $ref: "#/_histogram-parameters/start_time"
+      - $ref: "#/_histogram-parameters/end_time"
+      - $ref: "#/_histogram-parameters/period"
+      - $ref: "#/_histogram-parameters/timezone"
+      - $ref: "#/_histogram-parameters/min_latency"
+      - $ref: "#/_histogram-parameters/max_latency"
+      - $ref: "#/_histogram-parameters/min_tokens"
+      - $ref: "#/_histogram-parameters/max_tokens"
+      - $ref: "#/_histogram-parameters/min_cost"
+      - $ref: "#/_histogram-parameters/max_cost"
+      - $ref: "#/_histogram-parameters/missing_cost_only"
+      - $ref: "#/_histogram-parameters/aliases"
+      - $ref: "#/_histogram-parameters/parent_request_id"
+      - $ref: "#/_histogram-parameters/stop_reasons"
+      - $ref: "#/_histogram-parameters/tool_call_names"
+      - $ref: "#/_histogram-parameters/user_agents"
+      - $ref: "#/_histogram-parameters/apps"
+      - $ref: "#/_histogram-parameters/agent_names"
+      - $ref: "#/_histogram-parameters/session_id"
+      - $ref: "#/_histogram-parameters/agent_correlation_id"
+      - $ref: "#/_histogram-parameters/complexity_tiers"
+      - $ref: "#/_histogram-parameters/complexity_mechanisms"
+      - $ref: "#/_histogram-parameters/cache_hit_types"
+      - $ref: "#/_histogram-parameters/guardrail_outcomes"
+      - $ref: "#/_histogram-parameters/metadata_key"
       - $ref: "#/_histogram-parameters/content_search"
       - $ref: "#/_histogram-parameters/request_id"
     security:
@@ -744,9 +1411,245 @@ logs-histogram-latency-by-provider:
         content:
           application/json:
             schema:
-              $ref: "../../schemas/management/logging.yaml#/ProviderLatencyHistogramResult"
+              $ref: "../../schemas/management/logging.yaml#/ThroughputHistogramResult"
       "400":
         $ref: "../../openapi.yaml#/components/responses/BadRequest"
+      "500":
+        $ref: "../../openapi.yaml#/components/responses/InternalError"
+
+logs-histogram-throughput-by-provider:
+  get:
+    operationId: getLogsProviderThroughputHistogram
+    x-mint:
+      content: |
+        **Required Permissions**
+
+        | Permission | Granted via |
+        | --- | --- |
+        | `Dashboard:View` | RBAC role or API key scope |
+
+        [How permissions work](/api/procuring-api-keys#required-permissions)
+    summary: Get throughput histogram by provider
+    description: >-
+      Returns time-bucketed tokens per second with a per-provider breakdown.
+    tags:
+      - Logging
+    parameters:
+      - $ref: "#/_histogram-parameters/providers"
+      - $ref: "#/_histogram-parameters/models"
+      - $ref: "#/_histogram-parameters/status"
+      - $ref: "#/_histogram-parameters/objects"
+      - $ref: "#/_histogram-parameters/selected_key_ids"
+      - $ref: "#/_histogram-parameters/virtual_key_ids"
+      - $ref: "#/_histogram-parameters/team_ids"
+      - $ref: "#/_histogram-parameters/customer_ids"
+      - $ref: "#/_histogram-parameters/user_ids"
+      - $ref: "#/_histogram-parameters/business_unit_ids"
+      - $ref: "#/_histogram-parameters/project_ids"
+      - $ref: "#/_histogram-parameters/topic_ids"
+      - $ref: "#/_histogram-parameters/routing_rule_ids"
+      - $ref: "#/_histogram-parameters/model_router_ids"
+      - $ref: "#/_histogram-parameters/routing_engine_used"
+      - $ref: "#/_histogram-parameters/start_time"
+      - $ref: "#/_histogram-parameters/end_time"
+      - $ref: "#/_histogram-parameters/period"
+      - $ref: "#/_histogram-parameters/timezone"
+      - $ref: "#/_histogram-parameters/min_latency"
+      - $ref: "#/_histogram-parameters/max_latency"
+      - $ref: "#/_histogram-parameters/min_tokens"
+      - $ref: "#/_histogram-parameters/max_tokens"
+      - $ref: "#/_histogram-parameters/min_cost"
+      - $ref: "#/_histogram-parameters/max_cost"
+      - $ref: "#/_histogram-parameters/missing_cost_only"
+      - $ref: "#/_histogram-parameters/aliases"
+      - $ref: "#/_histogram-parameters/parent_request_id"
+      - $ref: "#/_histogram-parameters/stop_reasons"
+      - $ref: "#/_histogram-parameters/tool_call_names"
+      - $ref: "#/_histogram-parameters/user_agents"
+      - $ref: "#/_histogram-parameters/apps"
+      - $ref: "#/_histogram-parameters/agent_names"
+      - $ref: "#/_histogram-parameters/session_id"
+      - $ref: "#/_histogram-parameters/agent_correlation_id"
+      - $ref: "#/_histogram-parameters/complexity_tiers"
+      - $ref: "#/_histogram-parameters/complexity_mechanisms"
+      - $ref: "#/_histogram-parameters/cache_hit_types"
+      - $ref: "#/_histogram-parameters/guardrail_outcomes"
+      - $ref: "#/_histogram-parameters/metadata_key"
+      - $ref: "#/_histogram-parameters/content_search"
+      - $ref: "#/_histogram-parameters/request_id"
+    security:
+      - ManagementBearerAuth: []
+    responses:
+      "200":
+        description: Successful response
+        content:
+          application/json:
+            schema:
+              $ref: "../../schemas/management/logging.yaml#/ProviderThroughputHistogramResult"
+      "400":
+        $ref: "../../openapi.yaml#/components/responses/BadRequest"
+      "500":
+        $ref: "../../openapi.yaml#/components/responses/InternalError"
+
+logs-user-agent-mappings:
+  get:
+    operationId: listUserAgentMappings
+    x-mint:
+      content: |
+        **Required Permissions**
+
+        | Permission | Granted via |
+        | --- | --- |
+        | `Settings:View` | RBAC role or API key scope |
+
+        [How permissions work](/api/procuring-api-keys#required-permissions)
+    summary: List user agent mappings
+    description: |
+      Returns every custom rule that maps User-Agent values to an app label,
+      active or not, oldest first.
+    tags:
+      - Logging
+    security:
+      - ManagementBearerAuth: []
+      - BasicAuth: []
+    responses:
+      "200":
+        description: Successful response
+        content:
+          application/json:
+            schema:
+              $ref: "../../schemas/management/logging.yaml#/UserAgentMappingList"
+      "500":
+        $ref: "../../openapi.yaml#/components/responses/InternalError"
+
+  post:
+    operationId: createUserAgentMapping
+    x-mint:
+      content: |
+        **Required Permissions**
+
+        | Permission | Granted via |
+        | --- | --- |
+        | `Settings:Create` | RBAC role or API key scope |
+
+        [How permissions work](/api/procuring-api-keys#required-permissions)
+    summary: Create a user agent mapping
+    description: |
+      Creates a rule that maps matching User-Agent values to an app label.
+      `is_active` decides whether the rule is applied; omitted, it is false and
+      the rule is stored inactive. The server assigns `id` and both timestamps.
+    tags:
+      - Logging
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "../../schemas/management/logging.yaml#/UserAgentMappingInput"
+    security:
+      - ManagementBearerAuth: []
+      - BasicAuth: []
+    responses:
+      "200":
+        description: Mapping created
+        content:
+          application/json:
+            schema:
+              $ref: "../../schemas/management/logging.yaml#/UserAgentMapping"
+      "400":
+        $ref: "../../openapi.yaml#/components/responses/BadRequest"
+      "500":
+        $ref: "../../openapi.yaml#/components/responses/InternalError"
+
+logs-user-agent-mappings-by-id:
+  put:
+    operationId: updateUserAgentMapping
+    x-mint:
+      content: |
+        **Required Permissions**
+
+        | Permission | Granted via |
+        | --- | --- |
+        | `Settings:Update` | RBAC role or API key scope |
+
+        [How permissions work](/api/procuring-api-keys#required-permissions)
+    summary: Update a user agent mapping
+    description: |
+      Replaces a user agent mapping. Every field is overwritten: an omitted
+      `logo` is cleared and an omitted `is_active` becomes false.
+    tags:
+      - Logging
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: User agent mapping ID
+        schema:
+          type: string
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "../../schemas/management/logging.yaml#/UserAgentMappingInput"
+    security:
+      - ManagementBearerAuth: []
+      - BasicAuth: []
+    responses:
+      "200":
+        description: Mapping updated
+        content:
+          application/json:
+            schema:
+              $ref: "../../schemas/management/logging.yaml#/UserAgentMapping"
+      "400":
+        $ref: "../../openapi.yaml#/components/responses/BadRequest"
+      "404":
+        $ref: "../../openapi.yaml#/components/responses/NotFound"
+      "500":
+        $ref: "../../openapi.yaml#/components/responses/InternalError"
+
+  delete:
+    operationId: deleteUserAgentMapping
+    x-mint:
+      content: |
+        **Required Permissions**
+
+        | Permission | Granted via |
+        | --- | --- |
+        | `Settings:Delete` | RBAC role or API key scope |
+
+        [How permissions work](/api/procuring-api-keys#required-permissions)
+    summary: Delete a user agent mapping
+    description: |
+      Deletes a user agent mapping and stops applying it to new requests.
+    tags:
+      - Logging
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: User agent mapping ID
+        schema:
+          type: string
+    security:
+      - ManagementBearerAuth: []
+      - BasicAuth: []
+    responses:
+      "200":
+        description: Mapping deleted
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                success:
+                  type: boolean
+                  example: true
+      "400":
+        $ref: "../../openapi.yaml#/components/responses/BadRequest"
+      "404":
+        $ref: "../../openapi.yaml#/components/responses/NotFound"
       "500":
         $ref: "../../openapi.yaml#/components/responses/InternalError"
 
@@ -824,16 +1727,32 @@ _histogram-parameters:
     description: Comma-separated list of project IDs to filter by
     schema:
       type: string
+  topic_ids:
+    name: topic_ids
+    in: query
+    description: >-
+      Comma-separated list of Warp topic IDs to filter by: the requests Warp
+      filed under any of them, as its list_topics tool reports them. A topic
+      merged into one of these counts as it. Requests Warp has not indexed
+      never match.
+    schema:
+      type: string
   routing_rule_ids:
     name: routing_rule_ids
     in: query
     description: Comma-separated list of routing rule IDs to filter by
     schema:
       type: string
+  model_router_ids:
+    name: model_router_ids
+    in: query
+    description: Comma-separated list of model router IDs. Matches requests a model router took.
+    schema:
+      type: string
   routing_engine_used:
     name: routing_engine_used
     in: query
-    description: Comma-separated list of routing engines to filter by
+    description: Comma-separated list of routing engines to filter by (governance, routing-rule, loadbalancing, model-catalog, circuit-breaker, session-affinity, core)
     schema:
       type: string
   complexity_tiers:
@@ -845,7 +1764,7 @@ _histogram-parameters:
   complexity_mechanisms:
     name: complexity_mechanisms
     in: query
-    description: Comma-separated list of complexity decision mechanisms to filter by (semantic, llm, session, or skipped)
+    description: Comma-separated list of complexity decision mechanisms to filter by (semantic, decision, llm, session, or skipped)
     schema:
       type: string
   session_id:
@@ -871,7 +1790,19 @@ _histogram-parameters:
   period:
     name: period
     in: query
-    description: Relative time period filter
+    description: >-
+      Time window resolved server-side; takes precedence over start_time and end_time.
+      Sliding periods (1h, 6h, 24h, 7d, 30d) end now. Calendar periods (today, this_week,
+      this_month) start at midnight of the current day, week (Monday) or month in `timezone`.
+    schema:
+      type: string
+      enum: [1h, 6h, 24h, 7d, 30d, today, this_week, this_month]
+  timezone:
+    name: timezone
+    in: query
+    description: >-
+      IANA timezone that calendar periods are measured in (e.g. America/New_York). Empty or
+      unknown values fall back to UTC. Ignored for sliding periods.
     schema:
       type: string
   min_latency:
@@ -922,6 +1853,12 @@ _histogram-parameters:
     description: Comma-separated list of stop reasons to filter by
     schema:
       type: string
+  tool_call_names:
+    name: tool_call_names
+    in: query
+    description: Comma-separated list of function names. Matches requests whose response called any of them, using the persisted tool_call_names metadata on the log row. Names are recorded even when content logging is disabled and stay on the row in hybrid storage mode; the call arguments are not.
+    schema:
+      type: string
   cache_hit_types:
     name: cache_hit_types
     in: query
@@ -934,10 +1871,52 @@ _histogram-parameters:
     description: Parent request ID to filter by
     schema:
       type: string
+  user_agents:
+    name: user_agents
+    in: query
+    description: >-
+      Raw User-Agent strings to filter by. Send a JSON array (for example
+      `["Mozilla/5.0 (X11; Linux x86_64) KHTML, like Gecko"]`) so values containing commas
+      survive intact; a plain comma-separated list is also accepted.
+    schema:
+      type: string
+  apps:
+    name: apps
+    in: query
+    description: >-
+      Detected client apps to filter by. Send a JSON array of strings or a comma-separated list.
+    schema:
+      type: string
+  agent_names:
+    name: agent_names
+    in: query
+    description: Comma-separated list of registered agent names whose context IDs correlate the matching logs
+    schema:
+      type: string
+  agent_correlation_id:
+    name: agent_correlation_id
+    in: query
+    description: Exact caller-supplied agent correlation ID (the `x-bf-agent-correlation-id` request header)
+    schema:
+      type: string
+  guardrail_outcomes:
+    name: guardrail_outcomes
+    in: query
+    description: >-
+      Comma-separated list of guardrail outcomes to filter by. `blocked` matches requests a
+      guardrail intervened on; `detected` matches detect-only guardrail matches. Several values
+      are OR-ed together.
+    schema:
+      type: string
   metadata_key:
     name: metadata_<key>
     in: query
-    description: Metadata filter where <key> is the metadata key to match
+    description: >-
+      Filter on custom log metadata. Replace <key> with the metadata key, for example
+      `metadata_team=search`. Repeat with different keys to require all of them; the value
+      must match exactly. Keys may use letters, digits, `.`, `_` and `-`, up to 256 characters;
+      other keys are ignored. List the keys in use with
+      `GET /api/logs/filterdata?dimensions=metadata_keys`.
     schema:
       type: string
   content_search:
@@ -974,13 +1953,162 @@ _ranking-parameters:
       type: boolean
       default: false
 
+# Shared MCP tool log filter parameters
+_mcp-filter-parameters:
+  tool_names:
+    name: tool_names
+    in: query
+    description: Comma-separated list of tool names to filter by
+    schema:
+      type: string
+  server_labels:
+    name: server_labels
+    in: query
+    description: Comma-separated list of server labels to filter by
+    schema:
+      type: string
+  status:
+    name: status
+    in: query
+    description: >-
+      Comma-separated list of statuses to filter by. Values: `processing`, `success`, `error`,
+      `cancelled`, `input_required` (for example `success,error`).
+    schema:
+      type: string
+  virtual_key_ids:
+    name: virtual_key_ids
+    in: query
+    description: Comma-separated list of virtual key IDs to filter by
+    schema:
+      type: string
+  llm_request_ids:
+    name: llm_request_ids
+    in: query
+    description: Comma-separated list of LLM request IDs to filter by
+    schema:
+      type: string
+  user_ids:
+    name: user_ids
+    in: query
+    description: Comma-separated list of user IDs to filter by
+    schema:
+      type: string
+  team_ids:
+    name: team_ids
+    in: query
+    description: Comma-separated list of team IDs to filter by
+    schema:
+      type: string
+  customer_ids:
+    name: customer_ids
+    in: query
+    description: Comma-separated list of customer IDs to filter by
+    schema:
+      type: string
+  business_unit_ids:
+    name: business_unit_ids
+    in: query
+    description: Comma-separated list of business unit IDs to filter by
+    schema:
+      type: string
+  project_ids:
+    name: project_ids
+    in: query
+    description: Comma-separated list of project IDs to filter by
+    schema:
+      type: string
+  device_ids:
+    name: device_ids
+    in: query
+    description: Comma-separated list of device IDs to filter by
+    schema:
+      type: string
+  agent_names:
+    name: agent_names
+    in: query
+    description: Comma-separated list of registered agent names whose context IDs correlate the matching logs
+    schema:
+      type: string
+  session_id:
+    name: session_id
+    in: query
+    description: Exact Bifrost session ID used for request correlation
+    schema:
+      type: string
+  agent_correlation_id:
+    name: agent_correlation_id
+    in: query
+    description: Exact caller-supplied agent correlation ID (the `x-bf-agent-correlation-id` request header)
+    schema:
+      type: string
+  user_agents:
+    name: user_agents
+    in: query
+    description: >-
+      Raw User-Agent strings to filter by. Send a JSON array so values containing commas
+      survive intact; a plain comma-separated list is also accepted.
+    schema:
+      type: string
+  apps:
+    name: apps
+    in: query
+    description: Detected client apps to filter by. Send a JSON array of strings or a comma-separated list.
+    schema:
+      type: string
+  start_time:
+    name: start_time
+    in: query
+    description: Start time filter (RFC3339 format). An unparseable value is rejected with 400 unless `period` is set.
+    schema:
+      type: string
+      format: date-time
+  end_time:
+    name: end_time
+    in: query
+    description: End time filter (RFC3339 format). An unparseable value is rejected with 400 unless `period` is set.
+    schema:
+      type: string
+      format: date-time
+  min_latency:
+    name: min_latency
+    in: query
+    description: Minimum latency filter (milliseconds)
+    schema:
+      type: number
+  max_latency:
+    name: max_latency
+    in: query
+    description: Maximum latency filter (milliseconds)
+    schema:
+      type: number
+  content_search:
+    name: content_search
+    in: query
+    description: Search in tool arguments and results
+    schema:
+      type: string
+
 logs-recalculate-cost:
   post:
     operationId: recalculateLogCosts
+    x-bifrost-destructive: true
+    x-mint:
+      content: |
+        **Required Permissions**
+
+        | Permission | Granted via |
+        | --- | --- |
+        | `Logs:Update` | RBAC role or API key scope |
+
+        [How permissions work](/api/procuring-api-keys#required-permissions)
     summary: Recalculate log costs
     description: |
       Starts an asynchronous background job that recalculates log costs in batches.
       The returned payload is a job status object that can be polled via the status endpoint.
+
+      Recalculation updates the cost fields on matching log records only. It does not
+      retroactively debit, credit, or otherwise adjust governance budget usage. Governance
+      budgets retain the usage recorded when each request was originally processed.
     tags:
       - Logging
     requestBody:
@@ -991,6 +2119,7 @@ logs-recalculate-cost:
             $ref: "../../schemas/management/logging.yaml#/RecalculateCostRequest"
     security:
       - ManagementBearerAuth: []
+      - BasicAuth: []
     responses:
       "202":
         description: Cost recalculation job accepted
@@ -1018,6 +2147,15 @@ logs-recalculate-cost:
 logs-recalculate-cost-status:
   get:
     operationId: getRecalculateCostStatus
+    x-mint:
+      content: |
+        **Required Permissions**
+
+        | Permission | Granted via |
+        | --- | --- |
+        | `Logs:Update` | RBAC role or API key scope |
+
+        [How permissions work](/api/procuring-api-keys#required-permissions)
     summary: Get log cost recalculation status
     description: |
       Returns the current status of a log cost recalculation job.
@@ -1032,6 +2170,7 @@ logs-recalculate-cost-status:
           type: string
     security:
       - ManagementBearerAuth: []
+      - BasicAuth: []
     responses:
       "200":
         description: Recalculation job status
@@ -1054,68 +2193,108 @@ logs-recalculate-cost-status:
       "500":
         $ref: "../../openapi.yaml#/components/responses/InternalError"
 
+logs-recalculate-cost-cancel:
+  post:
+    operationId: cancelRecalculateCost
+    x-mint:
+      content: |
+        **Required Permissions**
+
+        | Permission | Granted via |
+        | --- | --- |
+        | `Logs:Update` | RBAC role or API key scope |
+
+        [How permissions work](/api/procuring-api-keys#required-permissions)
+    summary: Cancel log cost recalculation
+    description: |
+      Cancels the recalculation job selected by `id`, or the current in-flight recalculation
+      when `id` is omitted. Cancellation stops further batches; cost updates already committed
+      to log records are retained and are not rolled back. Logs that the job has not processed
+      remain unchanged.
+
+      The response uses the same job-status shape as the status endpoint and includes the
+      partial progress recorded at the time of the response. The worker may still be unwinding,
+      so poll the status endpoint with the returned `id` to obtain its final counters. If the
+      selected job has already reached a terminal state, the endpoint returns it unchanged.
+    tags:
+      - Logging
+    parameters:
+      - name: id
+        in: query
+        description: Optional recalculation job ID. Omit to cancel the current in-flight recalculation.
+        schema:
+          type: string
+    security:
+      - ManagementBearerAuth: []
+    responses:
+      "200":
+        description: Recalculation cancellation accepted, or the selected job was already terminal
+        content:
+          application/json:
+            schema:
+              $ref: "../../schemas/management/logging.yaml#/RecalculateCostResponse"
+      "400":
+        description: The supplied job ID belongs to a different background-job type
+        content:
+          application/json:
+            schema:
+              $ref: "../../schemas/management/common.yaml#/ErrorResponse"
+      "404":
+        description: The requested job was not found, or there is no in-flight recalculation to cancel
+        content:
+          application/json:
+            schema:
+              $ref: "../../schemas/management/common.yaml#/ErrorResponse"
+      "503":
+        description: Background job runner is not available
+        content:
+          application/json:
+            schema:
+              $ref: "../../schemas/management/common.yaml#/ErrorResponse"
+      "500":
+        $ref: "../../openapi.yaml#/components/responses/InternalError"
+
 mcp-logs:
   get:
     operationId: getMCPLogs
+    x-mint:
+      content: |
+        **Required Permissions**
+
+        | Permission | Granted via |
+        | --- | --- |
+        | `MCPLogs:View` | RBAC role or API key scope |
+
+        [How permissions work](/api/procuring-api-keys#required-permissions)
     summary: Get MCP tool logs
     description: |
       Retrieves MCP tool execution logs with filtering, search, and pagination via query parameters.
     tags:
       - Logging
     parameters:
-      - name: tool_names
-        in: query
-        description: Comma-separated list of tool names to filter by
-        schema:
-          type: string
-      - name: server_labels
-        in: query
-        description: Comma-separated list of server labels to filter by
-        schema:
-          type: string
-      - name: status
-        in: query
-        description: Comma-separated list of statuses to filter by (processing, success, error)
-        schema:
-          type: string
-          enum: [processing, success, error]
-      - name: virtual_key_ids
-        in: query
-        description: Comma-separated list of virtual key IDs to filter by
-        schema:
-          type: string
-      - name: llm_request_ids
-        in: query
-        description: Comma-separated list of LLM request IDs to filter by
-        schema:
-          type: string
-      - name: start_time
-        in: query
-        description: Start time filter (RFC3339 format)
-        schema:
-          type: string
-          format: date-time
-      - name: end_time
-        in: query
-        description: End time filter (RFC3339 format)
-        schema:
-          type: string
-          format: date-time
-      - name: min_latency
-        in: query
-        description: Minimum latency filter (milliseconds)
-        schema:
-          type: number
-      - name: max_latency
-        in: query
-        description: Maximum latency filter (milliseconds)
-        schema:
-          type: number
-      - name: content_search
-        in: query
-        description: Search in tool arguments and results
-        schema:
-          type: string
+      - $ref: "#/_mcp-filter-parameters/tool_names"
+      - $ref: "#/_mcp-filter-parameters/server_labels"
+      - $ref: "#/_mcp-filter-parameters/status"
+      - $ref: "#/_mcp-filter-parameters/virtual_key_ids"
+      - $ref: "#/_mcp-filter-parameters/llm_request_ids"
+      - $ref: "#/_mcp-filter-parameters/user_ids"
+      - $ref: "#/_mcp-filter-parameters/team_ids"
+      - $ref: "#/_mcp-filter-parameters/customer_ids"
+      - $ref: "#/_mcp-filter-parameters/business_unit_ids"
+      - $ref: "#/_mcp-filter-parameters/project_ids"
+      - $ref: "#/_mcp-filter-parameters/device_ids"
+      - $ref: "#/_mcp-filter-parameters/agent_names"
+      - $ref: "#/_mcp-filter-parameters/session_id"
+      - $ref: "#/_mcp-filter-parameters/agent_correlation_id"
+      - $ref: "#/_mcp-filter-parameters/user_agents"
+      - $ref: "#/_mcp-filter-parameters/apps"
+      - $ref: "#/_mcp-filter-parameters/start_time"
+      - $ref: "#/_mcp-filter-parameters/end_time"
+      - $ref: "#/_histogram-parameters/period"
+      - $ref: "#/_histogram-parameters/timezone"
+      - $ref: "#/_mcp-filter-parameters/min_latency"
+      - $ref: "#/_mcp-filter-parameters/max_latency"
+      - $ref: "#/_mcp-filter-parameters/content_search"
       - name: limit
         in: query
         description: Number of logs to return (default 50, max 1000)
@@ -1145,6 +2324,7 @@ mcp-logs:
           default: desc
     security:
       - ManagementBearerAuth: []
+      - BasicAuth: []
     responses:
       "200":
         description: Successful response
@@ -1159,8 +2339,21 @@ mcp-logs:
 
   delete:
     operationId: deleteMCPLogs
+    x-mint:
+      content: |
+        **Required Permissions**
+
+        | Permission | Granted via |
+        | --- | --- |
+        | `MCPLogs:Delete` | RBAC role or API key scope |
+
+        [How permissions work](/api/procuring-api-keys#required-permissions)
     summary: Delete MCP tool logs
-    description: Deletes MCP tool logs by their IDs.
+    description: |
+      Deletes MCP tool logs by their IDs.
+      Requires authenticated management access. Requests admitted without checking
+      credentials because dashboard authentication is disabled, unconfigured, or
+      bypassed by an auth whitelist receive 403 before any logs are deleted.
     tags:
       - Logging
     requestBody:
@@ -1171,6 +2364,7 @@ mcp-logs:
             $ref: "../../schemas/management/logging.yaml#/DeleteMCPLogsRequest"
     security:
       - ManagementBearerAuth: []
+      - BasicAuth: []
     responses:
       "200":
         description: MCP tool logs deleted successfully
@@ -1180,14 +2374,30 @@ mcp-logs:
               $ref: "../../schemas/management/common.yaml#/MessageResponse"
       "400":
         $ref: "../../openapi.yaml#/components/responses/BadRequest"
+      "403":
+        description: Authentication was bypassed; authenticated management access is required
+        content:
+          application/json:
+            schema:
+              $ref: "../../schemas/inference/common.yaml#/BifrostError"
       "500":
         $ref: "../../openapi.yaml#/components/responses/InternalError"
 
 mcp-logs-by-id:
   get:
     operationId: getMCPLogById
+    x-mint:
+      content: |
+        **Required Permissions**
+
+        | Permission | Granted via |
+        | --- | --- |
+        | `MCPLogs:View` | RBAC role or API key scope |
+
+        [How permissions work](/api/procuring-api-keys#required-permissions)
     summary: Get MCP tool log by ID
-    description: Retrieves a single MCP tool execution log by ID, including hydrated object-storage payloads when configured.
+    description: |
+      Retrieves a single MCP tool execution log by ID, including hydrated object-storage payloads when configured.
     tags:
       - Logging
     parameters:
@@ -1199,6 +2409,7 @@ mcp-logs-by-id:
           type: string
     security:
       - ManagementBearerAuth: []
+      - BasicAuth: []
     responses:
       "200":
         description: MCP tool log found
@@ -1216,73 +2427,67 @@ mcp-logs-by-id:
 mcp-logs-stats:
   get:
     operationId: getMCPLogsStats
+    x-mint:
+      content: |
+        **Required Permissions**
+
+        | Permission | Granted via |
+        | --- | --- |
+        | `MCPLogs:View` | RBAC role or API key scope |
+
+        [How permissions work](/api/procuring-api-keys#required-permissions)
     summary: Get MCP tool log statistics
-    description: Returns statistics for MCP tool logs matching the specified filters.
+    description: |
+      Returns statistics for MCP tool logs matching the specified filters.
     tags:
       - Logging
     parameters:
-      - name: tool_names
+      - $ref: "#/_mcp-filter-parameters/tool_names"
+      - $ref: "#/_mcp-filter-parameters/server_labels"
+      - $ref: "#/_mcp-filter-parameters/status"
+      - $ref: "#/_mcp-filter-parameters/virtual_key_ids"
+      - $ref: "#/_mcp-filter-parameters/llm_request_ids"
+      - $ref: "#/_mcp-filter-parameters/user_ids"
+      - $ref: "#/_mcp-filter-parameters/team_ids"
+      - $ref: "#/_mcp-filter-parameters/customer_ids"
+      - $ref: "#/_mcp-filter-parameters/business_unit_ids"
+      - $ref: "#/_mcp-filter-parameters/project_ids"
+      - $ref: "#/_mcp-filter-parameters/device_ids"
+      - $ref: "#/_mcp-filter-parameters/agent_names"
+      - $ref: "#/_mcp-filter-parameters/session_id"
+      - $ref: "#/_mcp-filter-parameters/agent_correlation_id"
+      - $ref: "#/_mcp-filter-parameters/user_agents"
+      - $ref: "#/_mcp-filter-parameters/apps"
+      - $ref: "#/_mcp-filter-parameters/start_time"
+      - $ref: "#/_mcp-filter-parameters/end_time"
+      - $ref: "#/_histogram-parameters/period"
+      - $ref: "#/_histogram-parameters/timezone"
+      - $ref: "#/_mcp-filter-parameters/min_latency"
+      - $ref: "#/_mcp-filter-parameters/max_latency"
+      - $ref: "#/_mcp-filter-parameters/content_search"
+      - name: compare_to_previous
         in: query
-        description: Comma-separated list of tool names to filter by
+        description: >-
+          When true, also return the same statistics for the immediately
+          preceding window of equal length, so callers can render
+          change-vs-previous-period. Requires a bounded window (start_time and
+          end_time, or period); an unbounded all-time filter has no preceding
+          window, and the response then omits `previous` with
+          `has_previous_period` false. A failure to compute the previous period
+          degrades to `has_previous_period` false rather than failing the request.
         schema:
-          type: string
-      - name: server_labels
-        in: query
-        description: Comma-separated list of server labels to filter by
-        schema:
-          type: string
-      - name: status
-        in: query
-        description: Comma-separated list of statuses to filter by
-        schema:
-          type: string
-          enum: [processing, success, error]
-      - name: virtual_key_ids
-        in: query
-        description: Comma-separated list of virtual key IDs to filter by
-        schema:
-          type: string
-      - name: llm_request_ids
-        in: query
-        description: Comma-separated list of LLM request IDs to filter by
-        schema:
-          type: string
-      - name: start_time
-        in: query
-        description: Start time filter (RFC3339 format)
-        schema:
-          type: string
-          format: date-time
-      - name: end_time
-        in: query
-        description: End time filter (RFC3339 format)
-        schema:
-          type: string
-          format: date-time
-      - name: min_latency
-        in: query
-        description: Minimum latency filter
-        schema:
-          type: number
-      - name: max_latency
-        in: query
-        description: Maximum latency filter
-        schema:
-          type: number
-      - name: content_search
-        in: query
-        description: Search in tool arguments and results
-        schema:
-          type: string
+          type: boolean
+          default: false
     security:
       - ManagementBearerAuth: []
+      - BasicAuth: []
     responses:
       "200":
         description: Successful response
         content:
           application/json:
             schema:
-              $ref: "../../schemas/management/logging.yaml#/MCPToolLogStats"
+              $ref: "../../schemas/management/logging.yaml#/MCPLogStatsResponse"
       "400":
         $ref: "../../openapi.yaml#/components/responses/BadRequest"
       "500":
@@ -1291,12 +2496,40 @@ mcp-logs-stats:
 mcp-logs-filterdata:
   get:
     operationId: getMCPLogsFilterData
+    x-mint:
+      content: |
+        **Required Permissions**
+
+        | Permission | Granted via |
+        | --- | --- |
+        | `MCPLogs:View` | RBAC role or API key scope |
+
+        [How permissions work](/api/procuring-api-keys#required-permissions)
     summary: Get available MCP log filter data
-    description: Returns all unique filter data from MCP tool logs (tool names, server labels).
+    description: |
+      Returns the values each MCP log filter can take, read from the MCP tool logs of the last 30 days.
     tags:
       - Logging
+    parameters:
+      - name: dimensions
+        in: query
+        description: >-
+          Comma-separated dimensions to return. One or more of `tool_names`,
+          `server_labels`, `apps`, `user_agents`, `virtual_keys`, `users`, `teams`,
+          `customers`, `business_units`, `projects`. Unrecognised values are ignored,
+          and asking for none returns every dimension.
+        schema:
+          type: string
+      - name: q
+        in: query
+        description: >-
+          Free-text search within the requested dimensions. Passing it bypasses
+          the response cache.
+        schema:
+          type: string
     security:
       - ManagementBearerAuth: []
+      - BasicAuth: []
     responses:
       "200":
         description: Successful response
@@ -1310,6 +2543,15 @@ mcp-logs-filterdata:
 logs-sessions-by-id:
   get:
     operationId: getLogSessionById
+    x-mint:
+      content: |
+        **Required Permissions**
+
+        | Permission | Granted via |
+        | --- | --- |
+        | `Logs:View` | RBAC role or API key scope |
+
+        [How permissions work](/api/procuring-api-keys#required-permissions)
     summary: Get logs for a session
     description: |
       Returns the paginated logs belonging to a single parent-request session
@@ -1325,11 +2567,12 @@ logs-sessions-by-id:
           type: string
       - name: limit
         in: query
-        description: Number of logs to return (default 200, max 200)
+        description: Number of logs to return (default 500, max 500)
         schema:
           type: integer
-          default: 200
-          maximum: 200
+          minimum: 1
+          default: 500
+          maximum: 500
       - name: offset
         in: query
         description: Number of logs to skip
@@ -1345,6 +2588,7 @@ logs-sessions-by-id:
           default: asc
     security:
       - ManagementBearerAuth: []
+      - BasicAuth: []
     responses:
       "200":
         description: Session logs retrieved successfully
@@ -1360,8 +2604,18 @@ logs-sessions-by-id:
 logs-sessions-summary-by-id:
   get:
     operationId: getLogSessionSummaryById
+    x-mint:
+      content: |
+        **Required Permissions**
+
+        | Permission | Granted via |
+        | --- | --- |
+        | `Logs:View` | RBAC role or API key scope |
+
+        [How permissions work](/api/procuring-api-keys#required-permissions)
     summary: Get aggregate totals for a session
-    description: Returns aggregate request count, token usage, cost, and duration for a single session.
+    description: |
+      Returns aggregate request count, token usage, cost, and duration for a single session.
     tags:
       - Logging
     parameters:
@@ -1373,6 +2627,7 @@ logs-sessions-summary-by-id:
           type: string
     security:
       - ManagementBearerAuth: []
+      - BasicAuth: []
     responses:
       "200":
         description: Session summary retrieved successfully
@@ -1388,6 +2643,15 @@ logs-sessions-summary-by-id:
 logs-rankings:
   get:
     operationId: getModelRankings
+    x-mint:
+      content: |
+        **Required Permissions**
+
+        | Permission | Granted via |
+        | --- | --- |
+        | `Dashboard:View` | RBAC role or API key scope |
+
+        [How permissions work](/api/procuring-api-keys#required-permissions)
     summary: Get model usage rankings
     description: |
       Returns models ranked by usage with trend percentages versus the previous
@@ -1407,12 +2671,15 @@ logs-rankings:
       - $ref: "#/_histogram-parameters/customer_ids"
       - $ref: "#/_histogram-parameters/user_ids"
       - $ref: "#/_histogram-parameters/business_unit_ids"
-      - $ref: '#/_histogram-parameters/project_ids'
+      - $ref: "#/_histogram-parameters/project_ids"
+      - $ref: "#/_histogram-parameters/topic_ids"
       - $ref: "#/_histogram-parameters/routing_rule_ids"
+      - $ref: "#/_histogram-parameters/model_router_ids"
       - $ref: "#/_histogram-parameters/routing_engine_used"
       - $ref: "#/_histogram-parameters/start_time"
       - $ref: "#/_histogram-parameters/end_time"
       - $ref: "#/_histogram-parameters/period"
+      - $ref: "#/_histogram-parameters/timezone"
       - $ref: "#/_histogram-parameters/min_latency"
       - $ref: "#/_histogram-parameters/max_latency"
       - $ref: "#/_histogram-parameters/min_tokens"
@@ -1421,9 +2688,17 @@ logs-rankings:
       - $ref: "#/_histogram-parameters/max_cost"
       - $ref: "#/_histogram-parameters/missing_cost_only"
       - $ref: "#/_histogram-parameters/stop_reasons"
+      - $ref: "#/_histogram-parameters/tool_call_names"
       - $ref: "#/_histogram-parameters/cache_hit_types"
       - $ref: "#/_histogram-parameters/parent_request_id"
       - $ref: "#/_histogram-parameters/session_id"
+      - $ref: "#/_histogram-parameters/user_agents"
+      - $ref: "#/_histogram-parameters/apps"
+      - $ref: "#/_histogram-parameters/agent_names"
+      - $ref: "#/_histogram-parameters/agent_correlation_id"
+      - $ref: "#/_histogram-parameters/complexity_tiers"
+      - $ref: "#/_histogram-parameters/complexity_mechanisms"
+      - $ref: "#/_histogram-parameters/guardrail_outcomes"
       - $ref: "#/_histogram-parameters/metadata_key"
       - $ref: "#/_histogram-parameters/content_search"
       - $ref: "#/_histogram-parameters/request_id"
@@ -1443,9 +2718,170 @@ logs-rankings:
       "500":
         $ref: "../../openapi.yaml#/components/responses/InternalError"
 
+logs-rankings-by-dimension:
+  get:
+    operationId: getDimensionRankings
+    x-mint:
+      content: |
+        **Required Permissions**
+
+        | Permission | Granted via |
+        | --- | --- |
+        | `Dashboard:View` | RBAC role or API key scope |
+
+        [How permissions work](/api/procuring-api-keys#required-permissions)
+    summary: Get rankings by governance dimension
+    description: |
+      Returns the entities of one governance dimension ranked by spend, tokens
+      and request volume, with trend percentages versus the previous comparable
+      period. Requests carrying no value for the dimension are reported under an
+      `Unassigned` entry rather than dropped, so the rows reconcile with real
+      traffic.
+
+      Note that the accepted `dimension` values differ from the ones the
+      `/by-dimension` histogram endpoints take: rankings use `project` where the
+      histograms use `project_id`.
+    tags:
+      - Logging
+    parameters:
+      - name: dimension
+        in: query
+        required: true
+        description: The governance dimension to rank by.
+        schema:
+          $ref: "../../schemas/management/logging.yaml#/RankingDimension"
+      - $ref: "#/_histogram-parameters/providers"
+      - $ref: "#/_histogram-parameters/models"
+      - $ref: "#/_histogram-parameters/aliases"
+      - $ref: "#/_histogram-parameters/status"
+      - $ref: "#/_histogram-parameters/objects"
+      - $ref: "#/_histogram-parameters/selected_key_ids"
+      - $ref: "#/_histogram-parameters/virtual_key_ids"
+      - $ref: "#/_histogram-parameters/team_ids"
+      - $ref: "#/_histogram-parameters/customer_ids"
+      - $ref: "#/_histogram-parameters/user_ids"
+      - $ref: "#/_histogram-parameters/business_unit_ids"
+      - $ref: "#/_histogram-parameters/project_ids"
+      - $ref: "#/_histogram-parameters/topic_ids"
+      - $ref: "#/_histogram-parameters/routing_rule_ids"
+      - $ref: "#/_histogram-parameters/model_router_ids"
+      - $ref: "#/_histogram-parameters/routing_engine_used"
+      - $ref: "#/_histogram-parameters/start_time"
+      - $ref: "#/_histogram-parameters/end_time"
+      - $ref: "#/_histogram-parameters/period"
+      - $ref: "#/_histogram-parameters/timezone"
+      - $ref: "#/_histogram-parameters/min_latency"
+      - $ref: "#/_histogram-parameters/max_latency"
+      - $ref: "#/_histogram-parameters/min_tokens"
+      - $ref: "#/_histogram-parameters/max_tokens"
+      - $ref: "#/_histogram-parameters/min_cost"
+      - $ref: "#/_histogram-parameters/max_cost"
+      - $ref: "#/_histogram-parameters/missing_cost_only"
+      - $ref: "#/_histogram-parameters/stop_reasons"
+      - $ref: "#/_histogram-parameters/tool_call_names"
+      - $ref: "#/_histogram-parameters/cache_hit_types"
+      - $ref: "#/_histogram-parameters/parent_request_id"
+      - $ref: "#/_histogram-parameters/session_id"
+      - $ref: "#/_histogram-parameters/user_agents"
+      - $ref: "#/_histogram-parameters/apps"
+      - $ref: "#/_histogram-parameters/agent_names"
+      - $ref: "#/_histogram-parameters/agent_correlation_id"
+      - $ref: "#/_histogram-parameters/complexity_tiers"
+      - $ref: "#/_histogram-parameters/complexity_mechanisms"
+      - $ref: "#/_histogram-parameters/guardrail_outcomes"
+      - $ref: "#/_histogram-parameters/metadata_key"
+      - $ref: "#/_histogram-parameters/content_search"
+      - $ref: "#/_histogram-parameters/request_id"
+      - $ref: "#/_ranking-parameters/limit"
+      - $ref: "#/_ranking-parameters/all"
+    security:
+      - ManagementBearerAuth: []
+      - BasicAuth: []
+    responses:
+      "200":
+        description: Dimension rankings retrieved successfully
+        content:
+          application/json:
+            schema:
+              $ref: "../../schemas/management/logging.yaml#/DimensionRankingResult"
+      "400":
+        $ref: "../../openapi.yaml#/components/responses/BadRequest"
+      "500":
+        $ref: "../../openapi.yaml#/components/responses/InternalError"
+
+logs-rankings-users:
+  get:
+    operationId: getUserRankings
+    x-mint:
+      metadata:
+        tag: Enterprise
+      content: |
+        <Note>
+          This endpoint is available in [Bifrost Enterprise](https://www.getmaxim.ai/bifrost/enterprise) only.
+        </Note>
+
+        **Required Permissions**
+
+        | Permission | Granted via |
+        | --- | --- |
+        | `Dashboard:View` | RBAC role or API key scope |
+
+        [How permissions work](/api/procuring-api-keys#required-permissions)
+    summary: Get user usage rankings
+    description: >-
+      Returns users ranked by spend, tokens and request volume, with trend
+      percentages versus the previous comparable period. Only requests that
+      resolved to a user are counted.
+    tags:
+      - Logging
+    parameters:
+      - $ref: "#/_histogram-parameters/providers"
+      - $ref: "#/_histogram-parameters/models"
+      - $ref: "#/_histogram-parameters/aliases"
+      - $ref: "#/_histogram-parameters/status"
+      - $ref: "#/_histogram-parameters/objects"
+      - $ref: "#/_histogram-parameters/selected_key_ids"
+      - $ref: "#/_histogram-parameters/virtual_key_ids"
+      - $ref: "#/_histogram-parameters/routing_rule_ids"
+      - $ref: "#/_histogram-parameters/model_router_ids"
+      - $ref: "#/_histogram-parameters/team_ids"
+      - $ref: "#/_histogram-parameters/customer_ids"
+      - $ref: "#/_histogram-parameters/user_ids"
+      - $ref: "#/_histogram-parameters/business_unit_ids"
+      - $ref: "#/_histogram-parameters/project_ids"
+      - $ref: "#/_histogram-parameters/topic_ids"
+      - $ref: "#/_histogram-parameters/start_time"
+      - $ref: "#/_histogram-parameters/end_time"
+      - $ref: "#/_histogram-parameters/period"
+      - $ref: "#/_histogram-parameters/timezone"
+      - $ref: "#/_ranking-parameters/limit"
+      - $ref: "#/_ranking-parameters/all"
+    security:
+      - ManagementBearerAuth: []
+    responses:
+      "200":
+        description: User rankings retrieved successfully
+        content:
+          application/json:
+            schema:
+              $ref: "../../schemas/management/logging.yaml#/UserRankingResult"
+      "400":
+        $ref: "../../openapi.yaml#/components/responses/BadRequest"
+      "500":
+        $ref: "../../openapi.yaml#/components/responses/InternalError"
+
 logs-dashboard:
   get:
     operationId: getDashboard
+    x-mint:
+      content: |
+        **Required Permissions**
+
+        | Permission | Granted via |
+        | --- | --- |
+        | `Logs:View` | RBAC role or API key scope |
+
+        [How permissions work](/api/procuring-api-keys#required-permissions)
     summary: Get consolidated dashboard data
     description: |
       Returns every metric shown on the workspace dashboard in a single
@@ -1474,12 +2910,15 @@ logs-dashboard:
       - $ref: "#/_histogram-parameters/customer_ids"
       - $ref: "#/_histogram-parameters/user_ids"
       - $ref: "#/_histogram-parameters/business_unit_ids"
-      - $ref: '#/_histogram-parameters/project_ids'
+      - $ref: "#/_histogram-parameters/project_ids"
+      - $ref: "#/_histogram-parameters/topic_ids"
       - $ref: "#/_histogram-parameters/routing_rule_ids"
+      - $ref: "#/_histogram-parameters/model_router_ids"
       - $ref: "#/_histogram-parameters/routing_engine_used"
       - $ref: "#/_histogram-parameters/start_time"
       - $ref: "#/_histogram-parameters/end_time"
       - $ref: "#/_histogram-parameters/period"
+      - $ref: "#/_histogram-parameters/timezone"
       - $ref: "#/_histogram-parameters/min_latency"
       - $ref: "#/_histogram-parameters/max_latency"
       - $ref: "#/_histogram-parameters/min_tokens"
@@ -1488,9 +2927,19 @@ logs-dashboard:
       - $ref: "#/_histogram-parameters/max_cost"
       - $ref: "#/_histogram-parameters/missing_cost_only"
       - $ref: "#/_histogram-parameters/stop_reasons"
+      - $ref: "#/_histogram-parameters/tool_call_names"
       - $ref: "#/_histogram-parameters/cache_hit_types"
       - $ref: "#/_histogram-parameters/parent_request_id"
       - $ref: "#/_histogram-parameters/session_id"
+      - $ref: "#/_histogram-parameters/user_agents"
+      - $ref: "#/_histogram-parameters/apps"
+      - $ref: "#/_histogram-parameters/agent_names"
+      - $ref: "#/_histogram-parameters/agent_correlation_id"
+      - $ref: "#/_histogram-parameters/complexity_tiers"
+      - $ref: "#/_histogram-parameters/complexity_mechanisms"
+      - $ref: "#/_histogram-parameters/guardrail_outcomes"
+      - $ref: "#/_mcp-filter-parameters/llm_request_ids"
+      - $ref: "#/_mcp-filter-parameters/device_ids"
       - $ref: "#/_histogram-parameters/metadata_key"
       - $ref: "#/_histogram-parameters/content_search"
       - $ref: "#/_histogram-parameters/request_id"
@@ -1508,6 +2957,7 @@ logs-dashboard:
       - $ref: "#/_ranking-parameters/all"
     security:
       - ManagementBearerAuth: []
+      - BasicAuth: []
     responses:
       "200":
         description: Dashboard data retrieved successfully
@@ -1523,6 +2973,15 @@ logs-dashboard:
 logs-histogram-cost-by-dimension:
   get:
     operationId: getLogsDimensionCostHistogram
+    x-mint:
+      content: |
+        **Required Permissions**
+
+        | Permission | Granted via |
+        | --- | --- |
+        | `Dashboard:View` | RBAC role or API key scope |
+
+        [How permissions work](/api/procuring-api-keys#required-permissions)
     summary: Get cost histogram by dimension
     description: |
       Returns time-bucketed cost data grouped by an arbitrary dimension
@@ -1544,11 +3003,15 @@ logs-histogram-cost-by-dimension:
       - $ref: "#/_histogram-parameters/objects"
       - $ref: "#/_histogram-parameters/selected_key_ids"
       - $ref: "#/_histogram-parameters/virtual_key_ids"
-      - $ref: '#/_histogram-parameters/project_ids'
+      - $ref: "#/_histogram-parameters/project_ids"
+      - $ref: "#/_histogram-parameters/topic_ids"
       - $ref: "#/_histogram-parameters/routing_rule_ids"
+      - $ref: "#/_histogram-parameters/model_router_ids"
       - $ref: "#/_histogram-parameters/routing_engine_used"
       - $ref: "#/_histogram-parameters/start_time"
       - $ref: "#/_histogram-parameters/end_time"
+      - $ref: "#/_histogram-parameters/period"
+      - $ref: "#/_histogram-parameters/timezone"
       - $ref: "#/_histogram-parameters/min_latency"
       - $ref: "#/_histogram-parameters/max_latency"
       - $ref: "#/_histogram-parameters/min_tokens"
@@ -1556,10 +3019,29 @@ logs-histogram-cost-by-dimension:
       - $ref: "#/_histogram-parameters/min_cost"
       - $ref: "#/_histogram-parameters/max_cost"
       - $ref: "#/_histogram-parameters/missing_cost_only"
+      - $ref: "#/_histogram-parameters/aliases"
+      - $ref: "#/_histogram-parameters/parent_request_id"
+      - $ref: "#/_histogram-parameters/team_ids"
+      - $ref: "#/_histogram-parameters/customer_ids"
+      - $ref: "#/_histogram-parameters/user_ids"
+      - $ref: "#/_histogram-parameters/business_unit_ids"
+      - $ref: "#/_histogram-parameters/stop_reasons"
+      - $ref: "#/_histogram-parameters/tool_call_names"
+      - $ref: "#/_histogram-parameters/user_agents"
+      - $ref: "#/_histogram-parameters/apps"
+      - $ref: "#/_histogram-parameters/agent_names"
+      - $ref: "#/_histogram-parameters/session_id"
+      - $ref: "#/_histogram-parameters/agent_correlation_id"
+      - $ref: "#/_histogram-parameters/complexity_tiers"
+      - $ref: "#/_histogram-parameters/complexity_mechanisms"
+      - $ref: "#/_histogram-parameters/cache_hit_types"
+      - $ref: "#/_histogram-parameters/guardrail_outcomes"
+      - $ref: "#/_histogram-parameters/metadata_key"
       - $ref: "#/_histogram-parameters/content_search"
       - $ref: "#/_histogram-parameters/request_id"
     security:
       - ManagementBearerAuth: []
+      - BasicAuth: []
     responses:
       "200":
         description: Dimension cost histogram retrieved successfully
@@ -1575,6 +3057,15 @@ logs-histogram-cost-by-dimension:
 logs-histogram-tokens-by-dimension:
   get:
     operationId: getLogsDimensionTokenHistogram
+    x-mint:
+      content: |
+        **Required Permissions**
+
+        | Permission | Granted via |
+        | --- | --- |
+        | `Dashboard:View` | RBAC role or API key scope |
+
+        [How permissions work](/api/procuring-api-keys#required-permissions)
     summary: Get token histogram by dimension
     description: |
       Returns time-bucketed token usage grouped by an arbitrary dimension.
@@ -1594,11 +3085,15 @@ logs-histogram-tokens-by-dimension:
       - $ref: "#/_histogram-parameters/objects"
       - $ref: "#/_histogram-parameters/selected_key_ids"
       - $ref: "#/_histogram-parameters/virtual_key_ids"
-      - $ref: '#/_histogram-parameters/project_ids'
+      - $ref: "#/_histogram-parameters/project_ids"
+      - $ref: "#/_histogram-parameters/topic_ids"
       - $ref: "#/_histogram-parameters/routing_rule_ids"
+      - $ref: "#/_histogram-parameters/model_router_ids"
       - $ref: "#/_histogram-parameters/routing_engine_used"
       - $ref: "#/_histogram-parameters/start_time"
       - $ref: "#/_histogram-parameters/end_time"
+      - $ref: "#/_histogram-parameters/period"
+      - $ref: "#/_histogram-parameters/timezone"
       - $ref: "#/_histogram-parameters/min_latency"
       - $ref: "#/_histogram-parameters/max_latency"
       - $ref: "#/_histogram-parameters/min_tokens"
@@ -1606,10 +3101,29 @@ logs-histogram-tokens-by-dimension:
       - $ref: "#/_histogram-parameters/min_cost"
       - $ref: "#/_histogram-parameters/max_cost"
       - $ref: "#/_histogram-parameters/missing_cost_only"
+      - $ref: "#/_histogram-parameters/aliases"
+      - $ref: "#/_histogram-parameters/parent_request_id"
+      - $ref: "#/_histogram-parameters/team_ids"
+      - $ref: "#/_histogram-parameters/customer_ids"
+      - $ref: "#/_histogram-parameters/user_ids"
+      - $ref: "#/_histogram-parameters/business_unit_ids"
+      - $ref: "#/_histogram-parameters/stop_reasons"
+      - $ref: "#/_histogram-parameters/tool_call_names"
+      - $ref: "#/_histogram-parameters/user_agents"
+      - $ref: "#/_histogram-parameters/apps"
+      - $ref: "#/_histogram-parameters/agent_names"
+      - $ref: "#/_histogram-parameters/session_id"
+      - $ref: "#/_histogram-parameters/agent_correlation_id"
+      - $ref: "#/_histogram-parameters/complexity_tiers"
+      - $ref: "#/_histogram-parameters/complexity_mechanisms"
+      - $ref: "#/_histogram-parameters/cache_hit_types"
+      - $ref: "#/_histogram-parameters/guardrail_outcomes"
+      - $ref: "#/_histogram-parameters/metadata_key"
       - $ref: "#/_histogram-parameters/content_search"
       - $ref: "#/_histogram-parameters/request_id"
     security:
       - ManagementBearerAuth: []
+      - BasicAuth: []
     responses:
       "200":
         description: Dimension token histogram retrieved successfully
@@ -1625,6 +3139,15 @@ logs-histogram-tokens-by-dimension:
 logs-histogram-latency-by-dimension:
   get:
     operationId: getLogsDimensionLatencyHistogram
+    x-mint:
+      content: |
+        **Required Permissions**
+
+        | Permission | Granted via |
+        | --- | --- |
+        | `Dashboard:View` | RBAC role or API key scope |
+
+        [How permissions work](/api/procuring-api-keys#required-permissions)
     summary: Get latency histogram by dimension
     description: |
       Returns time-bucketed latency percentiles (avg, p90, p95, p99) grouped by
@@ -1644,11 +3167,15 @@ logs-histogram-latency-by-dimension:
       - $ref: "#/_histogram-parameters/objects"
       - $ref: "#/_histogram-parameters/selected_key_ids"
       - $ref: "#/_histogram-parameters/virtual_key_ids"
-      - $ref: '#/_histogram-parameters/project_ids'
+      - $ref: "#/_histogram-parameters/project_ids"
+      - $ref: "#/_histogram-parameters/topic_ids"
       - $ref: "#/_histogram-parameters/routing_rule_ids"
+      - $ref: "#/_histogram-parameters/model_router_ids"
       - $ref: "#/_histogram-parameters/routing_engine_used"
       - $ref: "#/_histogram-parameters/start_time"
       - $ref: "#/_histogram-parameters/end_time"
+      - $ref: "#/_histogram-parameters/period"
+      - $ref: "#/_histogram-parameters/timezone"
       - $ref: "#/_histogram-parameters/min_latency"
       - $ref: "#/_histogram-parameters/max_latency"
       - $ref: "#/_histogram-parameters/min_tokens"
@@ -1656,10 +3183,29 @@ logs-histogram-latency-by-dimension:
       - $ref: "#/_histogram-parameters/min_cost"
       - $ref: "#/_histogram-parameters/max_cost"
       - $ref: "#/_histogram-parameters/missing_cost_only"
+      - $ref: "#/_histogram-parameters/aliases"
+      - $ref: "#/_histogram-parameters/parent_request_id"
+      - $ref: "#/_histogram-parameters/team_ids"
+      - $ref: "#/_histogram-parameters/customer_ids"
+      - $ref: "#/_histogram-parameters/user_ids"
+      - $ref: "#/_histogram-parameters/business_unit_ids"
+      - $ref: "#/_histogram-parameters/stop_reasons"
+      - $ref: "#/_histogram-parameters/tool_call_names"
+      - $ref: "#/_histogram-parameters/user_agents"
+      - $ref: "#/_histogram-parameters/apps"
+      - $ref: "#/_histogram-parameters/agent_names"
+      - $ref: "#/_histogram-parameters/session_id"
+      - $ref: "#/_histogram-parameters/agent_correlation_id"
+      - $ref: "#/_histogram-parameters/complexity_tiers"
+      - $ref: "#/_histogram-parameters/complexity_mechanisms"
+      - $ref: "#/_histogram-parameters/cache_hit_types"
+      - $ref: "#/_histogram-parameters/guardrail_outcomes"
+      - $ref: "#/_histogram-parameters/metadata_key"
       - $ref: "#/_histogram-parameters/content_search"
       - $ref: "#/_histogram-parameters/request_id"
     security:
       - ManagementBearerAuth: []
+      - BasicAuth: []
     responses:
       "200":
         description: Dimension latency histogram retrieved successfully
@@ -1675,65 +3221,47 @@ logs-histogram-latency-by-dimension:
 mcp-logs-histogram:
   get:
     operationId: getMCPLogsHistogram
+    x-mint:
+      content: |
+        **Required Permissions**
+
+        | Permission | Granted via |
+        | --- | --- |
+        | `MCPLogs:View` | RBAC role or API key scope |
+
+        [How permissions work](/api/procuring-api-keys#required-permissions)
     summary: Get MCP tool call volume histogram
-    description: Returns time-bucketed MCP tool call volume with success/error breakdown.
+    description: |
+      Returns time-bucketed volume of finished MCP tool calls with a success, error and cancelled breakdown.
     tags:
       - Logging
     parameters:
-      - name: tool_names
-        in: query
-        description: Comma-separated list of tool names to filter by
-        schema:
-          type: string
-      - name: server_labels
-        in: query
-        description: Comma-separated list of server labels to filter by
-        schema:
-          type: string
-      - name: status
-        in: query
-        description: Comma-separated list of statuses to filter by (processing, success, error)
-        schema:
-          type: string
-      - name: virtual_key_ids
-        in: query
-        description: Comma-separated list of virtual key IDs to filter by
-        schema:
-          type: string
-      - name: llm_request_ids
-        in: query
-        description: Comma-separated list of LLM request IDs to filter by
-        schema:
-          type: string
-      - name: start_time
-        in: query
-        description: Start time filter (RFC3339 format)
-        schema:
-          type: string
-          format: date-time
-      - name: end_time
-        in: query
-        description: End time filter (RFC3339 format)
-        schema:
-          type: string
-          format: date-time
-      - name: min_latency
-        in: query
-        description: Minimum latency filter (milliseconds)
-        schema:
-          type: number
-      - name: max_latency
-        in: query
-        description: Maximum latency filter (milliseconds)
-        schema:
-          type: number
-      - name: content_search
-        in: query
-        description: Search in tool arguments and results
-        schema:
-          type: string
+      - $ref: "#/_mcp-filter-parameters/tool_names"
+      - $ref: "#/_mcp-filter-parameters/server_labels"
+      - $ref: "#/_mcp-filter-parameters/status"
+      - $ref: "#/_mcp-filter-parameters/virtual_key_ids"
+      - $ref: "#/_mcp-filter-parameters/llm_request_ids"
+      - $ref: "#/_mcp-filter-parameters/user_ids"
+      - $ref: "#/_mcp-filter-parameters/team_ids"
+      - $ref: "#/_mcp-filter-parameters/customer_ids"
+      - $ref: "#/_mcp-filter-parameters/business_unit_ids"
+      - $ref: "#/_mcp-filter-parameters/project_ids"
+      - $ref: "#/_mcp-filter-parameters/device_ids"
+      - $ref: "#/_mcp-filter-parameters/agent_names"
+      - $ref: "#/_mcp-filter-parameters/session_id"
+      - $ref: "#/_mcp-filter-parameters/agent_correlation_id"
+      - $ref: "#/_mcp-filter-parameters/user_agents"
+      - $ref: "#/_mcp-filter-parameters/apps"
+      - $ref: "#/_mcp-filter-parameters/start_time"
+      - $ref: "#/_mcp-filter-parameters/end_time"
+      - $ref: "#/_histogram-parameters/period"
+      - $ref: "#/_histogram-parameters/timezone"
+      - $ref: "#/_mcp-filter-parameters/min_latency"
+      - $ref: "#/_mcp-filter-parameters/max_latency"
+      - $ref: "#/_mcp-filter-parameters/content_search"
     security:
       - ManagementBearerAuth: []
+      - BasicAuth: []
     responses:
       "200":
         description: MCP histogram retrieved successfully
@@ -1746,68 +3274,108 @@ mcp-logs-histogram:
       "500":
         $ref: "../../openapi.yaml#/components/responses/InternalError"
 
-mcp-logs-histogram-cost:
+mcp-logs-histogram-latency:
   get:
-    operationId: getMCPLogsCostHistogram
-    summary: Get MCP cost histogram
-    description: Returns time-bucketed MCP tool call cost data.
+    operationId: getMCPLogsLatencyHistogram
+    x-mint:
+      content: |
+        **Required Permissions**
+
+        | Permission | Granted via |
+        | --- | --- |
+        | `MCPLogs:View` | RBAC role or API key scope |
+
+        [How permissions work](/api/procuring-api-keys#required-permissions)
+    summary: Get MCP tool call latency histogram
+    description: |
+      Returns time-bucketed latency percentiles (avg, p90, p95, p99) of finished MCP tool calls, in the
+      shape of `/api/logs/histogram/latency`. MCP tool calls record no Bifrost overhead, so the overhead
+      fields are always 0.
     tags:
       - Logging
     parameters:
-      - name: tool_names
-        in: query
-        description: Comma-separated list of tool names to filter by
-        schema:
-          type: string
-      - name: server_labels
-        in: query
-        description: Comma-separated list of server labels to filter by
-        schema:
-          type: string
-      - name: status
-        in: query
-        description: Comma-separated list of statuses to filter by (processing, success, error)
-        schema:
-          type: string
-      - name: virtual_key_ids
-        in: query
-        description: Comma-separated list of virtual key IDs to filter by
-        schema:
-          type: string
-      - name: llm_request_ids
-        in: query
-        description: Comma-separated list of LLM request IDs to filter by
-        schema:
-          type: string
-      - name: start_time
-        in: query
-        description: Start time filter (RFC3339 format)
-        schema:
-          type: string
-          format: date-time
-      - name: end_time
-        in: query
-        description: End time filter (RFC3339 format)
-        schema:
-          type: string
-          format: date-time
-      - name: min_latency
-        in: query
-        description: Minimum latency filter (milliseconds)
-        schema:
-          type: number
-      - name: max_latency
-        in: query
-        description: Maximum latency filter (milliseconds)
-        schema:
-          type: number
-      - name: content_search
-        in: query
-        description: Search in tool arguments and results
-        schema:
-          type: string
+      - $ref: "#/_mcp-filter-parameters/tool_names"
+      - $ref: "#/_mcp-filter-parameters/server_labels"
+      - $ref: "#/_mcp-filter-parameters/status"
+      - $ref: "#/_mcp-filter-parameters/virtual_key_ids"
+      - $ref: "#/_mcp-filter-parameters/llm_request_ids"
+      - $ref: "#/_mcp-filter-parameters/user_ids"
+      - $ref: "#/_mcp-filter-parameters/team_ids"
+      - $ref: "#/_mcp-filter-parameters/customer_ids"
+      - $ref: "#/_mcp-filter-parameters/business_unit_ids"
+      - $ref: "#/_mcp-filter-parameters/project_ids"
+      - $ref: "#/_mcp-filter-parameters/device_ids"
+      - $ref: "#/_mcp-filter-parameters/agent_names"
+      - $ref: "#/_mcp-filter-parameters/session_id"
+      - $ref: "#/_mcp-filter-parameters/agent_correlation_id"
+      - $ref: "#/_mcp-filter-parameters/user_agents"
+      - $ref: "#/_mcp-filter-parameters/apps"
+      - $ref: "#/_mcp-filter-parameters/start_time"
+      - $ref: "#/_mcp-filter-parameters/end_time"
+      - $ref: "#/_histogram-parameters/period"
+      - $ref: "#/_histogram-parameters/timezone"
+      - $ref: "#/_mcp-filter-parameters/min_latency"
+      - $ref: "#/_mcp-filter-parameters/max_latency"
+      - $ref: "#/_mcp-filter-parameters/content_search"
     security:
       - ManagementBearerAuth: []
+      - BasicAuth: []
+    responses:
+      "200":
+        description: MCP latency histogram retrieved successfully
+        content:
+          application/json:
+            schema:
+              $ref: "../../schemas/management/logging.yaml#/LatencyHistogramResult"
+      "400":
+        $ref: "../../openapi.yaml#/components/responses/BadRequest"
+      "500":
+        $ref: "../../openapi.yaml#/components/responses/InternalError"
+
+mcp-logs-histogram-cost:
+  get:
+    operationId: getMCPLogsCostHistogram
+    x-mint:
+      content: |
+        **Required Permissions**
+
+        | Permission | Granted via |
+        | --- | --- |
+        | `MCPLogs:View` | RBAC role or API key scope |
+
+        [How permissions work](/api/procuring-api-keys#required-permissions)
+    summary: Get MCP cost histogram
+    description: |
+      Returns time-bucketed MCP tool call cost data.
+    tags:
+      - Logging
+    parameters:
+      - $ref: "#/_mcp-filter-parameters/tool_names"
+      - $ref: "#/_mcp-filter-parameters/server_labels"
+      - $ref: "#/_mcp-filter-parameters/status"
+      - $ref: "#/_mcp-filter-parameters/virtual_key_ids"
+      - $ref: "#/_mcp-filter-parameters/llm_request_ids"
+      - $ref: "#/_mcp-filter-parameters/user_ids"
+      - $ref: "#/_mcp-filter-parameters/team_ids"
+      - $ref: "#/_mcp-filter-parameters/customer_ids"
+      - $ref: "#/_mcp-filter-parameters/business_unit_ids"
+      - $ref: "#/_mcp-filter-parameters/project_ids"
+      - $ref: "#/_mcp-filter-parameters/device_ids"
+      - $ref: "#/_mcp-filter-parameters/agent_names"
+      - $ref: "#/_mcp-filter-parameters/session_id"
+      - $ref: "#/_mcp-filter-parameters/agent_correlation_id"
+      - $ref: "#/_mcp-filter-parameters/user_agents"
+      - $ref: "#/_mcp-filter-parameters/apps"
+      - $ref: "#/_mcp-filter-parameters/start_time"
+      - $ref: "#/_mcp-filter-parameters/end_time"
+      - $ref: "#/_histogram-parameters/period"
+      - $ref: "#/_histogram-parameters/timezone"
+      - $ref: "#/_mcp-filter-parameters/min_latency"
+      - $ref: "#/_mcp-filter-parameters/max_latency"
+      - $ref: "#/_mcp-filter-parameters/content_search"
+    security:
+      - ManagementBearerAuth: []
+      - BasicAuth: []
     responses:
       "200":
         description: MCP cost histogram retrieved successfully
@@ -1823,65 +3391,47 @@ mcp-logs-histogram-cost:
 mcp-logs-histogram-top-tools:
   get:
     operationId: getMCPLogsTopTools
+    x-mint:
+      content: |
+        **Required Permissions**
+
+        | Permission | Granted via |
+        | --- | --- |
+        | `MCPLogs:View` | RBAC role or API key scope |
+
+        [How permissions work](/api/procuring-api-keys#required-permissions)
     summary: Get top MCP tools by call count
-    description: Returns the top 10 MCP tools by call count, with cost totals.
+    description: |
+      Returns the top 10 MCP tools by call count, with cost totals.
     tags:
       - Logging
     parameters:
-      - name: tool_names
-        in: query
-        description: Comma-separated list of tool names to filter by
-        schema:
-          type: string
-      - name: server_labels
-        in: query
-        description: Comma-separated list of server labels to filter by
-        schema:
-          type: string
-      - name: status
-        in: query
-        description: Comma-separated list of statuses to filter by (processing, success, error)
-        schema:
-          type: string
-      - name: virtual_key_ids
-        in: query
-        description: Comma-separated list of virtual key IDs to filter by
-        schema:
-          type: string
-      - name: llm_request_ids
-        in: query
-        description: Comma-separated list of LLM request IDs to filter by
-        schema:
-          type: string
-      - name: start_time
-        in: query
-        description: Start time filter (RFC3339 format)
-        schema:
-          type: string
-          format: date-time
-      - name: end_time
-        in: query
-        description: End time filter (RFC3339 format)
-        schema:
-          type: string
-          format: date-time
-      - name: min_latency
-        in: query
-        description: Minimum latency filter (milliseconds)
-        schema:
-          type: number
-      - name: max_latency
-        in: query
-        description: Maximum latency filter (milliseconds)
-        schema:
-          type: number
-      - name: content_search
-        in: query
-        description: Search in tool arguments and results
-        schema:
-          type: string
+      - $ref: "#/_mcp-filter-parameters/tool_names"
+      - $ref: "#/_mcp-filter-parameters/server_labels"
+      - $ref: "#/_mcp-filter-parameters/status"
+      - $ref: "#/_mcp-filter-parameters/virtual_key_ids"
+      - $ref: "#/_mcp-filter-parameters/llm_request_ids"
+      - $ref: "#/_mcp-filter-parameters/user_ids"
+      - $ref: "#/_mcp-filter-parameters/team_ids"
+      - $ref: "#/_mcp-filter-parameters/customer_ids"
+      - $ref: "#/_mcp-filter-parameters/business_unit_ids"
+      - $ref: "#/_mcp-filter-parameters/project_ids"
+      - $ref: "#/_mcp-filter-parameters/device_ids"
+      - $ref: "#/_mcp-filter-parameters/agent_names"
+      - $ref: "#/_mcp-filter-parameters/session_id"
+      - $ref: "#/_mcp-filter-parameters/agent_correlation_id"
+      - $ref: "#/_mcp-filter-parameters/user_agents"
+      - $ref: "#/_mcp-filter-parameters/apps"
+      - $ref: "#/_mcp-filter-parameters/start_time"
+      - $ref: "#/_mcp-filter-parameters/end_time"
+      - $ref: "#/_histogram-parameters/period"
+      - $ref: "#/_histogram-parameters/timezone"
+      - $ref: "#/_mcp-filter-parameters/min_latency"
+      - $ref: "#/_mcp-filter-parameters/max_latency"
+      - $ref: "#/_mcp-filter-parameters/content_search"
     security:
       - ManagementBearerAuth: []
+      - BasicAuth: []
     responses:
       "200":
         description: MCP top tools retrieved successfully

@@ -19,12 +19,14 @@ import (
 	"github.com/maximhq/bifrost/core/schemas"
 	"github.com/maximhq/bifrost/framework/grant"
 
-	"github.com/maximhq/bifrost/transports/bifrost-http/lib"
+	"github.com/maximhq/bifrost/transports/v2/bifrost-http/lib"
 	"github.com/tidwall/gjson"
 	"github.com/valyala/fasthttp"
 )
 
 const isGeminiEmbedContentRequestContextKey schemas.BifrostContextKey = "bifrost-is-gemini-embed-content-request"
+
+const isGeminiBatchEmbedContentsRequestContextKey schemas.BifrostContextKey = "bifrost-is-gemini-batch-embed-contents-request"
 
 const isGeminiVideoGenerationRequestContextKey schemas.BifrostContextKey = "bifrost-is-gemini-video-generation-request"
 
@@ -37,6 +39,20 @@ const genAIRawRequestBodyContextKey schemas.BifrostContextKey = "bifrost-genai-r
 // GenAIRouter holds route registrations for genai endpoints.
 type GenAIRouter struct {
 	*GenericRouter
+}
+
+// GenAIRealtimePaths returns the WebSocket GET path a Google GenAI client opens for the Live API.
+func GenAIRealtimePaths(pathPrefix string) []string {
+	return []string{pathPrefix + "/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"}
+}
+
+// GenAIVertexRealtimePaths returns the WebSocket GET paths a Google GenAI client in Vertex mode opens for the Live
+// API: the Vertex AI service, in the API versions the SDK uses.
+func GenAIVertexRealtimePaths(pathPrefix string) []string {
+	return []string{
+		pathPrefix + "/ws/google.cloud.aiplatform.v1beta1.LlmBidiService/BidiGenerateContent",
+		pathPrefix + "/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent",
+	}
 }
 
 // CreateGenAIRouteConfigs creates a route configurations for GenAI endpoints.
@@ -82,13 +98,17 @@ func CreateGenAIRouteConfigs(pathPrefix string) []RouteConfig {
 			return requestType
 		},
 		GetRequestTypeInstance: func(ctx context.Context) interface{} {
-			if requestType, ok := ctx.Value(schemas.BifrostContextKeyHTTPRequestType).(schemas.RequestType); ok && requestType == schemas.EmbeddingRequest && ctx.Value(isGeminiEmbedContentRequestContextKey) != nil {
+			requestType, _ := ctx.Value(schemas.BifrostContextKeyHTTPRequestType).(schemas.RequestType)
+			if requestType == schemas.EmbeddingRequest && ctx.Value(isGeminiEmbedContentRequestContextKey) != nil {
 				return &gemini.GeminiEmbeddingRequest{}
 			}
-			if requestType, ok := ctx.Value(schemas.BifrostContextKeyHTTPRequestType).(schemas.RequestType); ok && requestType == schemas.VideoGenerationRequest && ctx.Value(isGeminiVideoGenerationRequestContextKey) != nil {
+			if requestType == schemas.EmbeddingRequest && ctx.Value(isGeminiBatchEmbedContentsRequestContextKey) != nil {
+				return &gemini.GeminiBatchEmbeddingRequest{}
+			}
+			if requestType == schemas.VideoGenerationRequest && ctx.Value(isGeminiVideoGenerationRequestContextKey) != nil {
 				return &gemini.GeminiVideoGenerationRequest{}
 			}
-			if requestType, ok := ctx.Value(schemas.BifrostContextKeyHTTPRequestType).(schemas.RequestType); ok && requestType == schemas.BatchCreateRequest && ctx.Value(isGeminiBatchCreateRequestContextKey) != nil {
+			if requestType == schemas.BatchCreateRequest && ctx.Value(isGeminiBatchCreateRequestContextKey) != nil {
 				return &gemini.GeminiBatchCreateRequest{}
 			}
 			if requestType, ok := ctx.Value(schemas.BifrostContextKeyHTTPRequestType).(schemas.RequestType); ok && requestType == schemas.CountTokensRequest {
@@ -134,13 +154,19 @@ func CreateGenAIRouteConfigs(pathPrefix string) []RouteConfig {
 					}, nil
 				}
 			} else if geminiReq, ok := req.(*gemini.GeminiEmbeddingRequest); ok {
-				req := &gemini.GeminiGenerationRequest{
-					Model:    geminiReq.Model,
-					Requests: []gemini.GeminiEmbeddingRequest{*geminiReq},
+				embReq, err := geminiReq.ToBifrostEmbeddingRequest(ctx)
+				if err != nil {
+					return nil, err
 				}
-				return &schemas.BifrostRequest{
-					EmbeddingRequest: req.ToBifrostEmbeddingRequest(ctx),
-				}, nil
+				return &schemas.BifrostRequest{EmbeddingRequest: embReq}, nil
+			} else if geminiReq, ok := req.(*gemini.GeminiBatchEmbeddingRequest); ok {
+				// :batchEmbedContents is Gemini's multi-input embedding call, not a batch job.
+				// Identical entry params go request-level; differing ones stay per input item.
+				embReq, err := geminiReq.ToBifrostEmbeddingRequest(ctx)
+				if err != nil {
+					return nil, err
+				}
+				return &schemas.BifrostRequest{EmbeddingRequest: embReq}, nil
 			} else if geminiReq, ok := req.(*gemini.GeminiVideoGenerationRequest); ok {
 				// convert to bifrost video generation request
 				bifrostReq, err := geminiReq.ToBifrostVideoGenerationRequest(ctx)
@@ -241,7 +267,13 @@ func CreateGenAIRouteConfigs(pathPrefix string) []RouteConfig {
 			return gemini.ToGeminiError(err)
 		},
 		StreamConfig: &StreamConfig{
-			HeartbeatFraming: lib.SSEHeartbeatDelimitedCommentBlock,
+			// No SSE heartbeat on this route. The official google-genai Python SDK (and
+			// LangChain's ChatGoogleGenerativeAI on top of it) json.loads every stream line
+			// that is not "data:" or blank, so a comment line in either framing aborts the
+			// stream with UnknownApiResponseError. The delimited block from PR 6252 only
+			// satisfied the JavaScript SDK. Disconnect detection here is therefore reactive
+			// only, the same trade-off the Bedrock route makes.
+			HeartbeatFraming: lib.SSEHeartbeatNone,
 			ResponsesStreamResponseConverter: func(ctx *schemas.BifrostContext, resp *schemas.BifrostResponsesStreamResponse) (string, interface{}, error) {
 				// Store state in context so it persists across chunks of the same stream
 				const stateKey = "gemini_stream_state"
@@ -259,6 +291,9 @@ func CreateGenAIRouteConfigs(pathPrefix string) []RouteConfig {
 					return "", nil, nil
 				}
 				return "", geminiResponse, nil
+			},
+			SpeechStreamResponseConverter: func(ctx *schemas.BifrostContext, resp *schemas.BifrostSpeechStreamResponse) (string, interface{}, error) {
+				return "", gemini.ToGeminiSpeechStreamResponse(resp), nil
 			},
 			ErrorConverter: func(ctx *schemas.BifrostContext, err *schemas.BifrostError) interface{} {
 				return gemini.ToGeminiError(err)
@@ -1516,6 +1551,11 @@ func extractAndSetModelAndRequestType(ctx *fasthttp.RequestCtx, bifrostCtx *sche
 			r.Model = modelStr
 		}
 		return nil
+	case *gemini.GeminiBatchEmbeddingRequest:
+		if modelStr != "" {
+			r.Model = modelStr
+		}
+		return nil
 	case *gemini.GeminiVideoGenerationRequest:
 		if modelStr != "" {
 			r.Model = modelStr
@@ -1638,7 +1678,8 @@ func collectGenAIGenerationTextPaths(paths *[]string, request gjson.Result, path
 	return collectErr
 }
 
-// collectGenAIContentTextPaths selects text parts and supported function-response JSON values from one Gemini content object.
+// collectGenAIContentTextPaths selects text parts, function-call argument string values, and supported function-response
+// JSON values from one Gemini content object.
 func collectGenAIContentTextPaths(paths *[]string, content gjson.Result, path string, includeFunctionResponses bool, replacements map[string]string) error {
 	if !content.Exists() || content.Type == gjson.Null {
 		return nil
@@ -1663,6 +1704,13 @@ func collectGenAIContentTextPaths(paths *[]string, content gjson.Result, path st
 		}
 		if !includeFunctionResponses {
 			return true
+		}
+		if collectErr = collectRawRequestArgumentStringPaths(
+			paths,
+			part.Get("functionCall.args"),
+			rawRequestObjectPath(rawRequestObjectPath(partPath, "functionCall"), "args"),
+		); collectErr != nil {
+			return false
 		}
 		functionResponse := part.Get("functionResponse")
 		if !functionResponse.Exists() || functionResponse.Type == gjson.Null {
@@ -1754,6 +1802,11 @@ func extractModelAndRequestType(ctx *fasthttp.RequestCtx) (string, schemas.Reque
 	}
 	if strings.HasSuffix(modelStr, ":embedContent") {
 		ctx.SetUserValue(isGeminiEmbedContentRequestContextKey, true)
+		return modelStr, schemas.EmbeddingRequest
+	}
+	if strings.HasSuffix(modelStr, ":batchEmbedContents") {
+		ctx.SetUserValue(isGeminiBatchEmbedContentsRequestContextKey, true)
+		return modelStr, schemas.EmbeddingRequest
 	}
 	if isEmbedding {
 		return modelStr, schemas.EmbeddingRequest
@@ -1884,16 +1937,14 @@ func isTranscriptionRequest(req *gemini.GeminiGenerationRequest) bool {
 		return false
 	}
 
-	// Check all contents for audio input
+	// Only inline audio counts: the transcription path carries bytes, not a fileData URI,
+	// so fileData audio stays on Responses, which forwards the URI.
 	for _, content := range req.Contents {
 		for _, part := range content.Parts {
-			// Check for inline audio data
-			if part.InlineData != nil && isAudioMimeType(part.InlineData.MIMEType) {
-				return true
+			if part == nil {
+				continue
 			}
-
-			// Check for file-based audio data
-			if part.FileData != nil && isAudioMimeType(part.FileData.MIMEType) {
+			if part.InlineData != nil && isAudioMimeType(part.InlineData.MIMEType) {
 				return true
 			}
 		}
@@ -1952,15 +2003,19 @@ func isImageGenerationRequest(req *gemini.GeminiGenerationRequest) bool {
 // isImageEditRequest checks if the request is for image edit
 // Image edit is detected by:
 // 1. Model is an Imagen model and has reference images
-// 2. Inline image data present in the first content part and response modalities contain IMAGE
+// 2. Inline image data present in any content part and response modalities contain IMAGE
 func isImageEditRequest(req *gemini.GeminiGenerationRequest) bool {
 	if schemas.IsImagenModel(req.Model) && len(req.Instances) > 0 && req.Instances[0].ReferenceImages != nil {
 		return true
 	}
 
-	if len(req.Contents) > 0 && len(req.Contents[0].Parts) > 0 && req.Contents[0].Parts[0].InlineData != nil && strings.Contains(req.Contents[0].Parts[0].InlineData.MIMEType, "image") {
-		for _, modality := range req.GenerationConfig.ResponseModalities {
-			if modality == gemini.ModalityImage {
+	if !slices.Contains(req.GenerationConfig.ResponseModalities, gemini.ModalityImage) {
+		return false
+	}
+
+	for _, content := range req.Contents {
+		for _, part := range content.Parts {
+			if part != nil && part.InlineData != nil && strings.Contains(part.InlineData.MIMEType, "image") {
 				return true
 			}
 		}

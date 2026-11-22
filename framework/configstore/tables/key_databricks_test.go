@@ -1,7 +1,9 @@
 package tables
 
 import (
+	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/maximhq/bifrost/core/schemas"
@@ -79,4 +81,73 @@ func TestTableKey_DatabricksRoundTrip(t *testing.T) {
 	require.NoError(t, db.First(&foundTags, tagsOnly.ID).Error)
 	require.NotNil(t, foundTags.DatabricksKeyConfig, "config carrying only forward_gateway_tags was wiped on reload")
 	assert.True(t, foundTags.DatabricksKeyConfig.ForwardGatewayTags)
+
+	// 5. OAuth scopes round-trip in order, and clearing them falls back to the all-apis default.
+	scoped := &TableKey{
+		Name: "dbx-scoped", ProviderID: 1, Provider: "databricks", KeyID: "dbx-4",
+		Value: *schemas.NewSecretVar(""),
+		DatabricksKeyConfig: &schemas.DatabricksKeyConfig{
+			WorkspaceURL: *schemas.NewSecretVar("https://dbc-1.cloud.databricks.com"),
+			ClientID:     schemas.NewSecretVar("client-id-value"),
+			ClientSecret: schemas.NewSecretVar("client-secret-value"),
+			Scopes:       []string{"model-serving-inference", "model-serving"},
+		},
+	}
+	require.NoError(t, db.Create(scoped).Error)
+	var foundScoped TableKey
+	require.NoError(t, db.First(&foundScoped, scoped.ID).Error)
+	require.NotNil(t, foundScoped.DatabricksKeyConfig)
+	assert.Equal(t, []string{"model-serving-inference", "model-serving"}, foundScoped.DatabricksKeyConfig.Scopes, "scopes lost on reload")
+
+	foundScoped.DatabricksKeyConfig.Scopes = nil
+	require.NoError(t, db.Save(&foundScoped).Error)
+	var cleared TableKey
+	require.NoError(t, db.First(&cleared, scoped.ID).Error)
+	require.NotNil(t, cleared.DatabricksKeyConfig)
+	assert.Empty(t, cleared.DatabricksKeyConfig.Scopes, "cleared scopes survived the save")
+}
+
+// TestMarshalVertexAWSWorkloadIdentityJSON_PersistsReferencesNotSecrets pins the storage form of the
+// vertex_aws_workload_identity_json column: like every other SecretVar-backed column, an env./vault.
+// field is stored as its reference, never as the resolved secret, and plain values stay plain. The
+// round-trip back into the config must restore the reference and re-resolve it.
+func TestMarshalVertexAWSWorkloadIdentityJSON_PersistsReferencesNotSecrets(t *testing.T) {
+	t.Setenv("TEST_WIF_ROLE_ARN", "arn:aws:iam::123456789012:role/VertexHop")
+	t.Setenv("TEST_WIF_SA", "vertex@my-project.iam.gserviceaccount.com")
+	audience := "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/eks/providers/aws"
+	cfg := &schemas.VertexAWSWorkloadIdentityConfig{
+		Audience:             *schemas.NewSecretVar(audience),
+		ServiceAccountEmail:  schemas.NewSecretVar("env.TEST_WIF_SA"),
+		TokenLifetimeSeconds: 1800,
+		AWSRoleARN:           schemas.NewSecretVar("env.TEST_WIF_ROLE_ARN"),
+	}
+	require.Equal(t, "arn:aws:iam::123456789012:role/VertexHop", cfg.AWSRoleARN.GetValue(), "precondition: the reference resolves")
+
+	stored, err := MarshalVertexAWSWorkloadIdentityJSON(cfg)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.NotContains(t, *stored, "VertexHop", "resolved secret must not be persisted: %s", *stored)
+	assert.NotContains(t, *stored, "vertex@my-project", "resolved reference must not be persisted: %s", *stored)
+	assert.Contains(t, *stored, `"aws_role_arn":"env.TEST_WIF_ROLE_ARN"`)
+	assert.Contains(t, *stored, `"service_account_email":"env.TEST_WIF_SA"`)
+	assert.Contains(t, *stored, `"audience":"`+audience+`"`, "plain values are stored as plain strings")
+	assert.Contains(t, *stored, `"token_lifetime_seconds":1800`)
+	assert.False(t, strings.Contains(*stored, "aws_region"), "unset optional fields are omitted: %s", *stored)
+
+	var back schemas.VertexAWSWorkloadIdentityConfig
+	require.NoError(t, json.Unmarshal([]byte(*stored), &back))
+	assert.Equal(t, audience, back.Audience.GetValue())
+	assert.False(t, back.Audience.IsFromSecret())
+	require.NotNil(t, back.AWSRoleARN)
+	assert.True(t, back.AWSRoleARN.IsFromEnv())
+	assert.Equal(t, "env.TEST_WIF_ROLE_ARN", back.AWSRoleARN.GetRawRef())
+	assert.Equal(t, "arn:aws:iam::123456789012:role/VertexHop", back.AWSRoleARN.GetValue(), "the reference re-resolves on load")
+	require.NotNil(t, back.ServiceAccountEmail)
+	assert.Equal(t, "env.TEST_WIF_SA", back.ServiceAccountEmail.GetRawRef())
+	assert.Nil(t, back.AWSRegion, "an omitted optional field loads as nil")
+	assert.Equal(t, 1800, back.TokenLifetimeSeconds)
+
+	nilStored, err := MarshalVertexAWSWorkloadIdentityJSON(nil)
+	require.NoError(t, err)
+	assert.Nil(t, nilStored)
 }

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -145,6 +146,7 @@ func (c *ComplexityEditableKeywordConfig) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// hasAnyComplexityField reports whether any named key is present in decoded JSON.
 func hasAnyComplexityField(fields map[string]json.RawMessage, names ...string) bool {
 	for _, name := range names {
 		if _, ok := fields[name]; ok {
@@ -301,13 +303,25 @@ func (c ComplexitySemanticConfig) MarshalJSON() ([]byte, error) {
 	})
 }
 
+// normalizeComplexityProvider trims a configured provider name and lowercases
+// it only when it names a built-in provider. Custom providers are registered
+// and looked up under their exact name, so lowercasing "DeepInfra-Embeddings"
+// would point the classifier at a provider that does not exist.
+func normalizeComplexityProvider(provider schemas.ModelProvider) schemas.ModelProvider {
+	trimmed := strings.TrimSpace(string(provider))
+	if lower := schemas.ModelProvider(strings.ToLower(trimmed)); slices.Contains(schemas.StandardProviders, lower) {
+		return lower
+	}
+	return schemas.ModelProvider(trimmed)
+}
+
 // normalized returns a canonical deep copy with defaults applied.
 func (c *ComplexitySemanticConfig) normalized() *ComplexitySemanticConfig {
 	if c == nil {
 		return nil
 	}
 	out := &ComplexitySemanticConfig{
-		Provider:            schemas.ModelProvider(strings.ToLower(strings.TrimSpace(string(c.Provider)))),
+		Provider:            normalizeComplexityProvider(c.Provider),
 		EmbeddingModel:      strings.TrimSpace(c.EmbeddingModel),
 		Timeout:             c.Timeout,
 		MinSimilarity:       c.MinSimilarity,
@@ -366,24 +380,42 @@ func (c *ComplexitySemanticConfig) Validate() error {
 			ComplexitySemanticVectorStoreEmbedded, ComplexitySemanticVectorStoreConfigured, c.VectorStore)
 	}
 	switch c.Fallback {
-	case ComplexitySemanticFallbackNone, ComplexitySemanticFallbackLLM:
+	case ComplexitySemanticFallbackNone, ComplexitySemanticFallbackLLM, ComplexitySemanticFallbackDecision:
 	default:
-		return fmt.Errorf("semantic fallback must be %q or %q, got %q",
-			ComplexitySemanticFallbackNone, ComplexitySemanticFallbackLLM, c.Fallback)
+		return fmt.Errorf("semantic fallback must be %q, %q, or %q, got %q",
+			ComplexitySemanticFallbackNone, ComplexitySemanticFallbackLLM, ComplexitySemanticFallbackDecision, c.Fallback)
 	}
 	return nil
 }
 
-// Semantic fallback selection. The fallback names what answers when semantic
-// classification produces no tier — a rejection below min_similarity, a
-// timeout, an unready warmup, or an unwired executor. "none" (also the
-// meaning of an absent field) keeps today's behaviour: the request is
-// recorded as "skipped". "llm" asks the configured chat model instead. The
-// LLM classifier only ever runs on this path; it is never the primary.
+// The primary classifier is semantic, decision or llm. Semantic fallback
+// selection names the optional classifier invoked when semantic classification
+// produces no tier; the fallback is only used by the semantic primary.
 const (
-	ComplexitySemanticFallbackNone = "none"
-	ComplexitySemanticFallbackLLM  = "llm"
+	ComplexityClassifierSemantic       = "semantic"
+	ComplexityClassifierDecision       = "decision"
+	ComplexityClassifierLLM            = "llm"
+	ComplexitySemanticFallbackNone     = "none"
+	ComplexitySemanticFallbackLLM      = "llm"
+	ComplexitySemanticFallbackDecision = "decision"
 )
+
+// DefaultComplexityDecisionProvider and DefaultComplexityDecisionModel are the
+// decision model the classifier calls when its block names none: Typesafe Jev.
+const (
+	DefaultComplexityDecisionProvider = schemas.Typesafe
+	DefaultComplexityDecisionModel    = "jev-latest"
+)
+
+// DefaultComplexityDecisionTimeout bounds one decision-model call.
+const DefaultComplexityDecisionTimeout = 1500 * time.Millisecond
+
+// DefaultComplexityDecisionPreviousMessageCount is the number of prior user messages
+// sent when the decision-model classifier does not specify a history window.
+const DefaultComplexityDecisionPreviousMessageCount = 1
+
+// MaxComplexityDecisionPreviousMessageCount bounds the number of prior user messages sent to the decision model.
+const MaxComplexityDecisionPreviousMessageCount = 5
 
 // DefaultComplexityLLMTimeout bounds one LLM classification call. It is
 // deliberately larger than the semantic default: a chat completion is slower
@@ -507,7 +539,7 @@ func (c *ComplexityLLMConfig) normalized() *ComplexityLLMConfig {
 		return nil
 	}
 	out := &ComplexityLLMConfig{
-		Provider:            schemas.ModelProvider(strings.ToLower(strings.TrimSpace(string(c.Provider)))),
+		Provider:            normalizeComplexityProvider(c.Provider),
 		Model:               strings.TrimSpace(c.Model),
 		Timeout:             c.Timeout,
 		Prompt:              strings.TrimSpace(c.Prompt),
@@ -554,6 +586,140 @@ func (c *ComplexityLLMConfig) Validate() error {
 	return nil
 }
 
+// ComplexityDecisionConfig controls the decision-model classification request.
+// Provider and Model name any decision-capable model reachable through
+// /v1/decisions (Typesafe Jev by default, or a custom provider serving Laya,
+// Nimble, or Clef); credentials come from that provider. The block also
+// controls request history, the classifier timeout, and each tier's editable
+// definition, signals, and examples. The question, decision and context rules,
+// and tier order are fixed by the gateway.
+type ComplexityDecisionConfig struct {
+	// Provider and Model select the decision model. Both empty selects the
+	// default (DefaultComplexityDecisionProvider/Model); otherwise both are set.
+	Provider schemas.ModelProvider `json:"provider,omitempty"`
+	Model    string                `json:"model,omitempty"`
+	// PreviousMessageCount is the number of preceding user messages sent before
+	// the current human request. Assistant messages are excluded.
+	PreviousMessageCount *int          `json:"previous_message_count,omitempty"`
+	Timeout              time.Duration `json:"timeout,omitempty"`
+	// MinConfidence is the confidence an answer must reach to publish its tier.
+	// 0 keeps every answer. The gateway applies it, so it works for any decision
+	// model. A missing confidence is derived from the tier probabilities; an
+	// answer with neither is kept.
+	MinConfidence float64 `json:"min_confidence,omitempty"`
+	// Criteria overrides per-tier definitions, signals, and examples, keyed by
+	// tier name. Any tier or field left unset sends the shipped default.
+	Criteria map[string]ComplexityDecisionTierCriteria `json:"criteria,omitempty"`
+}
+
+// UnmarshalJSON accepts Timeout as a duration string or milliseconds and rejects unknown fields.
+func (c *ComplexityDecisionConfig) UnmarshalJSON(data []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	for field := range fields {
+		switch field {
+		case "provider", "model", "previous_message_count", "timeout", "min_confidence", "criteria":
+		default:
+			return fmt.Errorf("unknown decision complexity field %q", field)
+		}
+	}
+	type alias ComplexityDecisionConfig
+	aux := &struct {
+		Timeout json.RawMessage `json:"timeout,omitempty"`
+		*alias
+	}{alias: (*alias)(c)}
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+	if len(aux.Timeout) == 0 || string(aux.Timeout) == "null" {
+		return nil
+	}
+	var duration string
+	if err := json.Unmarshal(aux.Timeout, &duration); err == nil {
+		parsed, err := time.ParseDuration(duration)
+		if err != nil {
+			return fmt.Errorf("failed to parse decision timeout duration string %q: %w", duration, err)
+		}
+		c.Timeout = parsed
+	} else {
+		var milliseconds float64
+		if err := json.Unmarshal(aux.Timeout, &milliseconds); err != nil {
+			return fmt.Errorf("unsupported decision timeout value: %s", string(aux.Timeout))
+		}
+		c.Timeout = time.Duration(milliseconds * float64(time.Millisecond))
+	}
+	if c.Timeout < 0 {
+		return fmt.Errorf("decision timeout must be non-negative, got %v", c.Timeout)
+	}
+	return nil
+}
+
+// MarshalJSON writes Timeout as a duration string for a stable round trip.
+func (c ComplexityDecisionConfig) MarshalJSON() ([]byte, error) {
+	type alias ComplexityDecisionConfig
+	var timeout string
+	if c.Timeout != 0 {
+		timeout = c.Timeout.String()
+	}
+	return json.Marshal(struct {
+		Timeout string `json:"timeout,omitempty"`
+		alias
+	}{Timeout: timeout, alias: alias(c)})
+}
+
+// normalized returns a decision-model config copy with its default model, history,
+// and timeout, and guidance overrides reduced to the values that differ from the
+// defaults.
+func (c *ComplexityDecisionConfig) normalized() *ComplexityDecisionConfig {
+	if c == nil {
+		return nil
+	}
+	out := &ComplexityDecisionConfig{
+		Provider:      normalizeComplexityProvider(c.Provider),
+		Model:         strings.TrimSpace(c.Model),
+		Timeout:       c.Timeout,
+		MinConfidence: c.MinConfidence,
+		Criteria:      normalizeComplexityDecisionCriteria(c.Criteria),
+	}
+	if out.Provider == "" && out.Model == "" {
+		out.Provider = DefaultComplexityDecisionProvider
+		out.Model = DefaultComplexityDecisionModel
+	}
+	if c.PreviousMessageCount == nil {
+		count := DefaultComplexityDecisionPreviousMessageCount
+		out.PreviousMessageCount = &count
+	} else {
+		count := *c.PreviousMessageCount
+		out.PreviousMessageCount = &count
+	}
+	if out.Timeout == 0 {
+		out.Timeout = DefaultComplexityDecisionTimeout
+	}
+	return out
+}
+
+// Validate checks the decision-model selection, request history, timeout, and confidence bounds.
+func (c *ComplexityDecisionConfig) Validate() error {
+	if c == nil {
+		return nil
+	}
+	if (strings.TrimSpace(string(c.Provider)) == "") != (strings.TrimSpace(c.Model) == "") {
+		return fmt.Errorf("decision provider and model must be set together, or both left empty for the default %s/%s", DefaultComplexityDecisionProvider, DefaultComplexityDecisionModel)
+	}
+	if c.Timeout < 0 {
+		return fmt.Errorf("decision timeout must be non-negative, got %v", c.Timeout)
+	}
+	if c.PreviousMessageCount != nil && (*c.PreviousMessageCount < 0 || *c.PreviousMessageCount > MaxComplexityDecisionPreviousMessageCount) {
+		return fmt.Errorf("decision previous_message_count must be between 0 and %d, got %d", MaxComplexityDecisionPreviousMessageCount, *c.PreviousMessageCount)
+	}
+	if math.IsNaN(c.MinConfidence) || c.MinConfidence < 0 || c.MinConfidence > 1 {
+		return fmt.Errorf("decision min_confidence must be between 0 and 1, got %v", c.MinConfidence)
+	}
+	return validateComplexityDecisionGuidance(c)
+}
+
 // ComplexitySessionConfig controls monotonic complexity-tier retention across
 // requests belonging to the same session.
 //
@@ -592,11 +758,397 @@ func (c *ComplexitySessionConfig) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// normalized returns a canonical copy of the session settings.
 func (c *ComplexitySessionConfig) normalized() *ComplexitySessionConfig {
 	if c == nil {
 		return nil
 	}
 	return &ComplexitySessionConfig{Enabled: c.Enabled}
+}
+
+// ComplexitySuggestionsConfig controls phrase suggestions for the semantic
+// router. Enabling it samples the vectors the semantic classifier already
+// computes for classified requests and keeps them for LookbackDays, so
+// suggestions can cluster real traffic in the router's own embedding space.
+// Only the vector and routing metadata are kept, under the request's log ID;
+// the text stays in the logs. A run on Schedule clusters that traffic and asks
+// the suggestion model for phrases.
+//
+// The block is persisted as a top-level key of the semantic row, never inside
+// the semantic block: released binaries decode that block strictly, so a new
+// field there would make the whole row unreadable after a rollback.
+type ComplexitySuggestionsConfig struct {
+	Enabled bool `json:"enabled"`
+	// SampleRate is the share of classified requests captured, in (0, 1].
+	// Omitted takes DefaultComplexitySuggestionsSampleRate.
+	SampleRate float64 `json:"sample_rate,omitempty"`
+	// LookbackDays is how much captured traffic suggestions draw on, and how
+	// long captured vectors are kept (capped at the log retention, enforced by
+	// the hourly capture cleanup). Omitted takes the default.
+	LookbackDays int `json:"lookback_days,omitempty"`
+	// Schedule is when runs start. Nil takes the defaults (daily at 03:00 UTC).
+	Schedule *ComplexitySuggestionsSchedule `json:"schedule,omitempty"`
+	// MaxClusteredRequests bounds the requests one run clusters; the rest of
+	// the window is assigned to the clusters found, so counts still cover all
+	// of it. Omitted takes DefaultComplexitySuggestionsMaxClusteredRequests.
+	MaxClusteredRequests int `json:"max_clustered_requests,omitempty"`
+	// MinClusterRequests is the smallest cluster a suggestion is written for.
+	// Omitted takes DefaultComplexitySuggestionsMinClusterRequests.
+	MinClusterRequests int `json:"min_cluster_requests,omitempty"`
+	// Provider and Model select the chat model that writes phrases; only an
+	// LLM can. Set together. Normalized fills them from the llm block when
+	// both are empty, so the model in use is always the one shown.
+	Provider schemas.ModelProvider `json:"provider,omitempty"`
+	Model    string                `json:"model,omitempty"`
+	// Instructions replace the shipped phrase-writing instructions when set.
+	// The fixed reinforcement is added either way.
+	Instructions string `json:"instructions,omitempty"`
+	// Tier is how each suggestion's tier is decided. Nil normalizes to the
+	// llm classifier on the phrase model.
+	Tier *ComplexitySuggestionsTierConfig `json:"tier,omitempty"`
+}
+
+// Tier classifiers a suggestion run can decide tiers with.
+const (
+	ComplexitySuggestionsTierLLM      = "llm"
+	ComplexitySuggestionsTierDecision = "decision"
+)
+
+// ComplexitySuggestionsTierConfig selects how each suggestion's tier is
+// picked, and with what. Provider and Model are set together; Normalized fills
+// them when both are empty (the phrase model for llm, the router's decision
+// model or the shipped default for decision).
+//
+// Every word the tier model reads is editable, apart from the fixed output and
+// safety rules. Left empty, a run generates the text from the router as it is
+// then: its tier definitions and, as examples, the phrases its administrator
+// configured. Once edited, the text is sent exactly as written and no longer
+// follows the router.
+//
+//   - llm: Prompt is the whole system prompt body (instructions, tier
+//     definitions and examples).
+//   - decision: Instructions are the choice question's instructions, and
+//     Criteria each tier's definition, signals and examples, sent as the
+//     choices. A tier missing from Criteria is generated.
+type ComplexitySuggestionsTierConfig struct {
+	Classifier   string                                    `json:"classifier"`
+	Provider     schemas.ModelProvider                     `json:"provider,omitempty"`
+	Model        string                                    `json:"model,omitempty"`
+	Prompt       string                                    `json:"prompt,omitempty"`
+	Instructions string                                    `json:"instructions,omitempty"`
+	Criteria     map[string]ComplexityDecisionTierCriteria `json:"criteria,omitempty"`
+}
+
+// UnmarshalJSON rejects unknown fields so a misspelled setting cannot be
+// accepted while silently doing nothing.
+func (c *ComplexitySuggestionsTierConfig) UnmarshalJSON(data []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	for field := range fields {
+		switch field {
+		case "classifier", "provider", "model", "prompt", "instructions", "criteria":
+		default:
+			return fmt.Errorf("unknown complexity suggestions tier field %q", field)
+		}
+	}
+	type plain ComplexitySuggestionsTierConfig
+	var decoded plain
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*c = ComplexitySuggestionsTierConfig(decoded)
+	return nil
+}
+
+func (c *ComplexitySuggestionsTierConfig) normalized() *ComplexitySuggestionsTierConfig {
+	out := ComplexitySuggestionsTierConfig{}
+	if c != nil {
+		out = *c
+	}
+	out.Classifier = strings.ToLower(strings.TrimSpace(out.Classifier))
+	if out.Classifier == "" {
+		out.Classifier = ComplexitySuggestionsTierLLM
+	}
+	out.Provider = normalizeComplexityProvider(out.Provider)
+	out.Model = strings.TrimSpace(out.Model)
+	if strings.TrimSpace(out.Prompt) == "" {
+		out.Prompt = ""
+	}
+	if strings.TrimSpace(out.Instructions) == "" {
+		out.Instructions = ""
+	}
+	// Lists keep their order and case, as the decision guidance's do; an
+	// emptied list stays empty, because an edited tier is sent as written.
+	// Tier names are matched in any case, so two names for one tier (simple
+	// and SIMPLE) would leave map order to pick which survives: the second is
+	// kept under the name it was sent as, which Validate refuses.
+	var criteria map[string]ComplexityDecisionTierCriteria
+	sentAs := map[string]string{} // normalized tier name -> the name it was sent as
+	for tier, c := range out.Criteria {
+		if criteria == nil {
+			criteria = make(map[string]ComplexityDecisionTierCriteria, len(out.Criteria))
+		}
+		entry := ComplexityDecisionTierCriteria{
+			Definition: strings.TrimSpace(c.Definition),
+			Signals:    normalizeComplexityDecisionList(c.Signals),
+			Examples:   normalizeComplexityDecisionList(c.Examples),
+		}
+		name := strings.ToUpper(strings.TrimSpace(tier))
+		first, seen := sentAs[name]
+		switch {
+		case !seen:
+			sentAs[name] = tier
+			criteria[name] = entry
+		case tier != name:
+			criteria[tier] = entry
+		default:
+			// This one is the canonical spelling, so the earlier one moves
+			// back to the name it was sent as.
+			criteria[first] = criteria[name]
+			criteria[name] = entry
+		}
+	}
+	out.Criteria = criteria
+	return &out
+}
+
+// Validate checks the tier settings.
+func (c *ComplexitySuggestionsTierConfig) Validate() error {
+	if c == nil {
+		return nil
+	}
+	if c.Classifier != ComplexitySuggestionsTierLLM && c.Classifier != ComplexitySuggestionsTierDecision {
+		return fmt.Errorf("suggestions tier classifier must be %q or %q, got %q", ComplexitySuggestionsTierLLM, ComplexitySuggestionsTierDecision, c.Classifier)
+	}
+	if (c.Provider == "") != (c.Model == "") {
+		return fmt.Errorf("suggestions tier provider and model must be set together")
+	}
+	if n := utf8.RuneCountInString(c.Prompt); n > MaxComplexitySuggestionsTierPromptChars {
+		return fmt.Errorf("suggestions tier prompt must be at most %d characters, got %d", MaxComplexitySuggestionsTierPromptChars, n)
+	}
+	if n := utf8.RuneCountInString(c.Instructions); n > MaxComplexitySuggestionsInstructionsChars {
+		return fmt.Errorf("suggestions tier instructions must be at most %d characters, got %d", MaxComplexitySuggestionsInstructionsChars, n)
+	}
+	for tier, criteria := range c.Criteria {
+		if !slices.Contains(complexityDecisionTierOrder, tier) {
+			if name := strings.ToUpper(strings.TrimSpace(tier)); slices.Contains(complexityDecisionTierOrder, name) {
+				return fmt.Errorf("suggestions tier criteria name %s more than once (%q is another spelling of it)", name, tier)
+			}
+			return fmt.Errorf("suggestions tier criteria tier must be one of %s, got %q", strings.Join(complexityDecisionTierOrder, ", "), tier)
+		}
+		if criteria.Definition == "" {
+			return fmt.Errorf("suggestions tier criteria %s needs a definition", tier)
+		}
+		if n := utf8.RuneCountInString(criteria.Definition); n > MaxComplexityDecisionDefinitionCharacters {
+			return fmt.Errorf("suggestions tier criteria %s definition must be at most %d characters, got %d", tier, MaxComplexityDecisionDefinitionCharacters, n)
+		}
+		if err := validateComplexityDecisionList(tier, "signals", criteria.Signals); err != nil {
+			return err
+		}
+		if err := validateComplexityDecisionList(tier, "examples", criteria.Examples); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+const (
+	// DefaultComplexitySuggestionsSampleRate captures one classified request
+	// in ten.
+	DefaultComplexitySuggestionsSampleRate = 0.1
+	// DefaultComplexitySuggestionsLookbackDays keeps a week of traffic.
+	DefaultComplexitySuggestionsLookbackDays = 7
+	// MaxComplexitySuggestionsLookbackDays bounds how long captured vectors
+	// can be kept.
+	MaxComplexitySuggestionsLookbackDays = 90
+	// DefaultComplexitySuggestionsMaxClusteredRequests is measured, not
+	// guessed: 16k WildChat prompts clustered in under two minutes, and at
+	// 1536 dimensions 20k vectors are about 120 MB.
+	DefaultComplexitySuggestionsMaxClusteredRequests = 20000
+	// MinComplexitySuggestionsMaxClusteredRequests keeps a run worth its
+	// model calls.
+	MinComplexitySuggestionsMaxClusteredRequests = 1000
+	// MaxComplexitySuggestionsMaxClusteredRequests bounds a run's memory
+	// (about 600 MB of vectors at 1536 dimensions).
+	MaxComplexitySuggestionsMaxClusteredRequests = 100000
+	// DefaultComplexitySuggestionsMinClusterRequests matches the clustering
+	// default: fewer requests than this are an anecdote, not a pattern.
+	DefaultComplexitySuggestionsMinClusterRequests = 6
+	// MaxComplexitySuggestionsMinClusterRequests bounds the setting to
+	// something a week of sampled traffic can reach.
+	MaxComplexitySuggestionsMinClusterRequests = 1000
+	// MaxComplexitySuggestionsInstructionsChars bounds the editable
+	// instructions, matching the suggestion package's limit.
+	MaxComplexitySuggestionsInstructionsChars = 8000
+	// MaxComplexitySuggestionsTierPromptChars bounds an edited llm tier
+	// prompt, which holds the instructions, definitions and examples.
+	MaxComplexitySuggestionsTierPromptChars = 16000
+)
+
+// UnmarshalJSON rejects unknown fields so a misspelled setting cannot be
+// accepted while silently doing nothing.
+func (c *ComplexitySuggestionsConfig) UnmarshalJSON(data []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	for field := range fields {
+		switch field {
+		case "enabled", "sample_rate", "lookback_days", "schedule", "max_clustered_requests",
+			"min_cluster_requests", "provider", "model", "instructions", "tier":
+		default:
+			return fmt.Errorf("unknown complexity suggestions field %q", field)
+		}
+	}
+	var decoded struct {
+		Enabled              *bool                            `json:"enabled"`
+		SampleRate           *float64                         `json:"sample_rate"`
+		LookbackDays         *int                             `json:"lookback_days"`
+		Schedule             *ComplexitySuggestionsSchedule   `json:"schedule"`
+		MaxClusteredRequests *int                             `json:"max_clustered_requests"`
+		MinClusterRequests   *int                             `json:"min_cluster_requests"`
+		Provider             schemas.ModelProvider            `json:"provider"`
+		Model                string                           `json:"model"`
+		Instructions         string                           `json:"instructions"`
+		Tier                 *ComplexitySuggestionsTierConfig `json:"tier"`
+	}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	if decoded.Enabled == nil {
+		return fmt.Errorf("complexity suggestions config requires enabled")
+	}
+	// Zero in the struct means "use the default", so only an omitted field
+	// may become one; a supplied zero (or null) is out of range and refused
+	// here, before normalized() would quietly replace it.
+	if _, ok := fields["sample_rate"]; ok && (decoded.SampleRate == nil || *decoded.SampleRate == 0) {
+		return fmt.Errorf("suggestions sample_rate must be greater than 0 and at most 1, got %s", fields["sample_rate"])
+	}
+	if _, ok := fields["lookback_days"]; ok && (decoded.LookbackDays == nil || *decoded.LookbackDays == 0) {
+		return fmt.Errorf("suggestions lookback_days must be between 1 and %d, got %s", MaxComplexitySuggestionsLookbackDays, fields["lookback_days"])
+	}
+	if _, ok := fields["max_clustered_requests"]; ok && (decoded.MaxClusteredRequests == nil || *decoded.MaxClusteredRequests == 0) {
+		return fmt.Errorf("suggestions max_clustered_requests must be between %d and %d, got %s",
+			MinComplexitySuggestionsMaxClusteredRequests, MaxComplexitySuggestionsMaxClusteredRequests, fields["max_clustered_requests"])
+	}
+	if _, ok := fields["min_cluster_requests"]; ok && (decoded.MinClusterRequests == nil || *decoded.MinClusterRequests == 0) {
+		return fmt.Errorf("suggestions min_cluster_requests must be between 2 and %d, got %s", MaxComplexitySuggestionsMinClusterRequests, fields["min_cluster_requests"])
+	}
+	*c = ComplexitySuggestionsConfig{
+		Enabled: *decoded.Enabled, Schedule: decoded.Schedule,
+		Provider: decoded.Provider, Model: decoded.Model, Instructions: decoded.Instructions, Tier: decoded.Tier,
+	}
+	if decoded.SampleRate != nil {
+		c.SampleRate = *decoded.SampleRate
+	}
+	if decoded.LookbackDays != nil {
+		c.LookbackDays = *decoded.LookbackDays
+	}
+	if decoded.MaxClusteredRequests != nil {
+		c.MaxClusteredRequests = *decoded.MaxClusteredRequests
+	}
+	if decoded.MinClusterRequests != nil {
+		c.MinClusterRequests = *decoded.MinClusterRequests
+	}
+	return nil
+}
+
+// normalized returns a canonical copy with defaults filled in.
+func (c *ComplexitySuggestionsConfig) normalized() *ComplexitySuggestionsConfig {
+	if c == nil {
+		return nil
+	}
+	out := *c
+	if out.SampleRate == 0 {
+		out.SampleRate = DefaultComplexitySuggestionsSampleRate
+	}
+	if out.LookbackDays == 0 {
+		out.LookbackDays = DefaultComplexitySuggestionsLookbackDays
+	}
+	if out.MaxClusteredRequests == 0 {
+		out.MaxClusteredRequests = DefaultComplexitySuggestionsMaxClusteredRequests
+	}
+	if out.MinClusterRequests == 0 {
+		out.MinClusterRequests = DefaultComplexitySuggestionsMinClusterRequests
+	}
+	out.Provider = normalizeComplexityProvider(out.Provider)
+	out.Model = strings.TrimSpace(out.Model)
+	if strings.TrimSpace(out.Instructions) == "" {
+		out.Instructions = ""
+	}
+	out.Schedule = out.Schedule.normalized()
+	out.Tier = out.Tier.normalized()
+	if out.Tier.Classifier == ComplexitySuggestionsTierLLM && out.Tier.Provider == "" && out.Tier.Model == "" {
+		out.Tier.Provider, out.Tier.Model = out.Provider, out.Model
+	}
+	return &out
+}
+
+// withModels fills the models a suggestions block leaves empty from the rest
+// of the router: the phrase model from the llm block, and a decision tier
+// model from the decision block or the shipped decision default. A block that
+// names its models keeps them, so the models in use are always the ones the
+// config shows.
+func (c *ComplexitySuggestionsConfig) withModels(llm *ComplexityLLMConfig, decision *ComplexityDecisionConfig) *ComplexitySuggestionsConfig {
+	if c == nil {
+		return nil
+	}
+	out := *c
+	if out.Provider == "" && out.Model == "" && llm != nil && llm.Model != "" {
+		out.Provider, out.Model = llm.Provider, llm.Model
+	}
+	tier := *out.Tier.normalized()
+	switch {
+	case tier.Provider != "" || tier.Model != "":
+	case tier.Classifier == ComplexitySuggestionsTierLLM:
+		tier.Provider, tier.Model = out.Provider, out.Model
+	case decision != nil && decision.Model != "":
+		tier.Provider, tier.Model = decision.Provider, decision.Model
+	default:
+		tier.Provider, tier.Model = DefaultComplexityDecisionProvider, DefaultComplexityDecisionModel
+	}
+	out.Tier = &tier
+	return &out
+}
+
+// Validate checks the suggestion settings.
+func (c *ComplexitySuggestionsConfig) Validate() error {
+	if c == nil {
+		return nil
+	}
+	if math.IsNaN(c.SampleRate) || c.SampleRate <= 0 || c.SampleRate > 1 {
+		return fmt.Errorf("suggestions sample_rate must be greater than 0 and at most 1, got %v", c.SampleRate)
+	}
+	if c.LookbackDays < 1 || c.LookbackDays > MaxComplexitySuggestionsLookbackDays {
+		return fmt.Errorf("suggestions lookback_days must be between 1 and %d, got %d", MaxComplexitySuggestionsLookbackDays, c.LookbackDays)
+	}
+	if c.MaxClusteredRequests < MinComplexitySuggestionsMaxClusteredRequests || c.MaxClusteredRequests > MaxComplexitySuggestionsMaxClusteredRequests {
+		return fmt.Errorf("suggestions max_clustered_requests must be between %d and %d, got %d",
+			MinComplexitySuggestionsMaxClusteredRequests, MaxComplexitySuggestionsMaxClusteredRequests, c.MaxClusteredRequests)
+	}
+	if c.MinClusterRequests < 2 || c.MinClusterRequests > MaxComplexitySuggestionsMinClusterRequests {
+		return fmt.Errorf("suggestions min_cluster_requests must be between 2 and %d, got %d", MaxComplexitySuggestionsMinClusterRequests, c.MinClusterRequests)
+	}
+	if (c.Provider == "") != (c.Model == "") {
+		return fmt.Errorf("suggestions provider and model must be set together")
+	}
+	if n := utf8.RuneCountInString(c.Instructions); n > MaxComplexitySuggestionsInstructionsChars {
+		return fmt.Errorf("suggestions instructions must be at most %d characters, got %d", MaxComplexitySuggestionsInstructionsChars, n)
+	}
+	if err := c.Tier.Validate(); err != nil {
+		return err
+	}
+	return c.Schedule.Validate()
+}
+
+// EffectiveSchedule returns the schedule with defaults filled in.
+func (c *ComplexitySuggestionsConfig) EffectiveSchedule() ComplexitySuggestionsSchedule {
+	if c == nil {
+		return *(*ComplexitySuggestionsSchedule)(nil).normalized()
+	}
+	return *c.Schedule.normalized()
 }
 
 // ComplexityAnalyzerConfigHashes tracks the config.json hash for each editable
@@ -607,23 +1159,31 @@ type ComplexityAnalyzerConfigHashes struct {
 	SimpleKeywords  string `json:"simple_keywords,omitempty"`
 	MediumKeywords  string `json:"medium_keywords,omitempty"`
 	ComplexKeywords string `json:"complex_keywords,omitempty"`
-	// SemanticSettings covers the semantic block (provider, model, timeout,
-	// budgets flag, vector store). The semantic classifier's
-	// exemplars are the shared keyword lists, tracked by the sections above.
+	// SemanticSettings covers semantic classifier settings and its fallback.
 	SemanticSettings string `json:"semantic_settings,omitempty"`
+	// ClassifierSettings tracks the primary classifier selection.
+	ClassifierSettings string `json:"classifier_settings,omitempty"`
+	// DecisionSettings tracks the decision-model history window and timeout.
+	DecisionSettings string `json:"decision_settings,omitempty"`
 	// LLMSettings covers the llm block (provider, model, timeout, prompt,
 	// history window, budgets flag). The fallback selector rides the
 	// SemanticSettings hash: it is a field of the semantic block.
-	LLMSettings     string `json:"llm_settings,omitempty"`
-	SessionSettings string `json:"session_settings,omitempty"`
+	LLMSettings         string `json:"llm_settings,omitempty"`
+	SessionSettings     string `json:"session_settings,omitempty"`
+	SuggestionsSettings string `json:"suggestions_settings,omitempty"`
 }
 
 type legacyComplexityAnalyzerConfigHashes struct {
-	TierBoundaries    string `json:"tier_boundaries,omitempty"`
-	CodeKeywords      string `json:"code_keywords,omitempty"`
-	ReasoningKeywords string `json:"reasoning_keywords,omitempty"`
-	TechnicalKeywords string `json:"technical_keywords,omitempty"`
-	SimpleKeywords    string `json:"simple_keywords,omitempty"`
+	TierBoundaries     string `json:"tier_boundaries,omitempty"`
+	CodeKeywords       string `json:"code_keywords,omitempty"`
+	ReasoningKeywords  string `json:"reasoning_keywords,omitempty"`
+	TechnicalKeywords  string `json:"technical_keywords,omitempty"`
+	SimpleKeywords     string `json:"simple_keywords,omitempty"`
+	SemanticSettings   string `json:"semantic_settings,omitempty"`
+	ClassifierSettings string `json:"classifier_settings,omitempty"`
+	DecisionSettings   string `json:"decision_settings,omitempty"`
+	LLMSettings        string `json:"llm_settings,omitempty"`
+	SessionSettings    string `json:"session_settings,omitempty"`
 }
 
 // UnmarshalJSON translates persisted legacy section hashes into the canonical
@@ -649,10 +1209,15 @@ func (h *ComplexityAnalyzerConfigHashes) UnmarshalJSON(data []byte) error {
 			return err
 		}
 		*h = ComplexityAnalyzerConfigHashes{
-			TierBoundaries:  legacy.TierBoundaries,
-			SimpleKeywords:  legacy.SimpleKeywords,
-			MediumKeywords:  mediumHash,
-			ComplexKeywords: legacy.ReasoningKeywords,
+			TierBoundaries:     legacy.TierBoundaries,
+			SimpleKeywords:     legacy.SimpleKeywords,
+			MediumKeywords:     mediumHash,
+			ComplexKeywords:    legacy.ReasoningKeywords,
+			SemanticSettings:   legacy.SemanticSettings,
+			ClassifierSettings: legacy.ClassifierSettings,
+			DecisionSettings:   legacy.DecisionSettings,
+			LLMSettings:        legacy.LLMSettings,
+			SessionSettings:    legacy.SessionSettings,
 		}
 		return nil
 	}
@@ -680,7 +1245,12 @@ func (h ComplexityAnalyzerConfigHashes) Equal(other ComplexityAnalyzerConfigHash
 type ComplexityAnalyzerConfig struct {
 	TierBoundaries ComplexityTierBoundaries        `json:"tier_boundaries"`
 	Keywords       ComplexityEditableKeywordConfig `json:"keywords"`
-	Semantic       *ComplexitySemanticConfig       `json:"semantic,omitempty"`
+	// Classifier selects the primary complexity classifier. An omitted value
+	// defaults to semantic for compatibility with existing configurations.
+	Classifier string                    `json:"classifier,omitempty"`
+	Semantic   *ComplexitySemanticConfig `json:"semantic,omitempty"`
+	// Decision configures the optional decision-model classifier and its history window.
+	Decision *ComplexityDecisionConfig `json:"decision,omitempty"`
 	// LLM configures the chat-completion fallback classifier, engaged only
 	// when Semantic.Fallback selects "llm". It may be present while the
 	// fallback says "none": the block is retained so toggling the fallback
@@ -688,7 +1258,9 @@ type ComplexityAnalyzerConfig struct {
 	LLM *ComplexityLLMConfig `json:"llm,omitempty"`
 	// Session enables the built-in monotonic session tier. It is separate from
 	// semantic message_history_count: no message or turn history is persisted.
-	Session      *ComplexitySessionConfig       `json:"session,omitempty"`
+	Session *ComplexitySessionConfig `json:"session,omitempty"`
+	// Suggestions enables request capture for phrase suggestions.
+	Suggestions  *ComplexitySuggestionsConfig   `json:"suggestions,omitempty"`
 	ConfigHashes ComplexityAnalyzerConfigHashes `json:"-"`
 	// EmbeddingFingerprint is reserved for config-store implementations that
 	// persist routing state. The semantic classifier verifies a VectorStore-side
@@ -739,24 +1311,37 @@ type persistedComplexityTierBoundaries struct {
 // semantic settings: an exemplar is only meaningful to the classifier that
 // embeds it, and keeping it here is what stops a Bifrost predating the semantic
 // router from rewriting it as though it were a lexical keyword.
+//
+// DecisionMinConfidence is decision.min_confidence, stored beside the block
+// because released binaries decode that block strictly: a new field inside it
+// makes the whole row unreadable after a rollback, and the router drops to
+// defaults. This record ignores unknown keys, so a rolled-back binary runs with
+// the gate off instead.
 type complexitySemanticConfigRecord struct {
-	Keywords             ComplexityEditableKeywordConfig `json:"keywords"`
-	Semantic             *ComplexitySemanticConfig       `json:"semantic,omitempty"`
-	LLM                  *ComplexityLLMConfig            `json:"llm,omitempty"`
-	Session              *ComplexitySessionConfig        `json:"session,omitempty"`
-	ConfigHashes         complexitySemanticRowHashes     `json:"_config_hashes,omitempty"`
-	EmbeddingFingerprint string                          `json:"_embedding_fingerprint,omitempty"`
+	Keywords              ComplexityEditableKeywordConfig `json:"keywords"`
+	Classifier            string                          `json:"classifier,omitempty"`
+	Semantic              *ComplexitySemanticConfig       `json:"semantic,omitempty"`
+	Decision              *ComplexityDecisionConfig       `json:"decision,omitempty"`
+	DecisionMinConfidence float64                         `json:"decision_min_confidence,omitempty"`
+	LLM                   *ComplexityLLMConfig            `json:"llm,omitempty"`
+	Session               *ComplexitySessionConfig        `json:"session,omitempty"`
+	Suggestions           *ComplexitySuggestionsConfig    `json:"suggestions,omitempty"`
+	ConfigHashes          complexitySemanticRowHashes     `json:"_config_hashes,omitempty"`
+	EmbeddingFingerprint  string                          `json:"_embedding_fingerprint,omitempty"`
 }
 
 // complexitySemanticRowHashes carries the section hashes for everything the
 // semantic row owns.
 type complexitySemanticRowHashes struct {
-	SimpleKeywords   string `json:"simple_keywords,omitempty"`
-	MediumKeywords   string `json:"medium_keywords,omitempty"`
-	ComplexKeywords  string `json:"complex_keywords,omitempty"`
-	SemanticSettings string `json:"semantic_settings,omitempty"`
-	LLMSettings      string `json:"llm_settings,omitempty"`
-	SessionSettings  string `json:"session_settings,omitempty"`
+	SimpleKeywords      string `json:"simple_keywords,omitempty"`
+	MediumKeywords      string `json:"medium_keywords,omitempty"`
+	ComplexKeywords     string `json:"complex_keywords,omitempty"`
+	SemanticSettings    string `json:"semantic_settings,omitempty"`
+	ClassifierSettings  string `json:"classifier_settings,omitempty"`
+	DecisionSettings    string `json:"decision_settings,omitempty"`
+	LLMSettings         string `json:"llm_settings,omitempty"`
+	SessionSettings     string `json:"session_settings,omitempty"`
+	SuggestionsSettings string `json:"suggestions_settings,omitempty"`
 }
 
 // LLMFallbackEnabled reports whether a semantic non-answer should be retried
@@ -767,6 +1352,12 @@ func (c *ComplexityAnalyzerConfig) LLMFallbackEnabled() bool {
 	return c != nil && c.Semantic != nil &&
 		c.Semantic.Fallback == ComplexitySemanticFallbackLLM &&
 		c.LLM != nil
+}
+
+// SuggestionsEnabled reports whether request capture for phrase suggestions
+// is on.
+func (c *ComplexityAnalyzerConfig) SuggestionsEnabled() bool {
+	return c != nil && c.Suggestions != nil && c.Suggestions.Enabled
 }
 
 // SessionRoutingEnabled reports whether monotonic session-tier retention is enabled.
@@ -796,7 +1387,15 @@ func (c *ComplexityAnalyzerConfig) Validate() error {
 	if len(missing) > 0 {
 		return fmt.Errorf("keyword lists must be non-empty: %s", strings.Join(missing, ", "))
 	}
+	switch c.Classifier {
+	case "", ComplexityClassifierSemantic, ComplexityClassifierDecision, ComplexityClassifierLLM:
+	default:
+		return fmt.Errorf("complexity classifier must be %q, %q or %q, got %q", ComplexityClassifierSemantic, ComplexityClassifierDecision, ComplexityClassifierLLM, c.Classifier)
+	}
 	if err := c.Semantic.Validate(); err != nil {
+		return err
+	}
+	if err := c.Decision.Validate(); err != nil {
 		return err
 	}
 	if c.Semantic != nil {
@@ -804,14 +1403,30 @@ func (c *ComplexityAnalyzerConfig) Validate() error {
 			return err
 		}
 	}
+	if err := c.Suggestions.Validate(); err != nil {
+		return err
+	}
 	if err := c.LLM.Validate(); err != nil {
 		return err
 	}
 	if c.Semantic != nil && c.Semantic.Fallback == ComplexitySemanticFallbackLLM && c.LLM == nil {
 		return fmt.Errorf("semantic fallback %q requires an llm config block", ComplexitySemanticFallbackLLM)
 	}
-	if c.SessionRoutingEnabled() && c.Semantic == nil {
+	if c.Classifier == ComplexityClassifierLLM && c.LLM == nil {
+		return fmt.Errorf("complexity classifier %q requires an llm config block", ComplexityClassifierLLM)
+	}
+	if c.SessionRoutingEnabled() && c.Semantic == nil && (c.Classifier == "" || c.Classifier == ComplexityClassifierSemantic) {
 		return fmt.Errorf("complexity session routing requires a semantic config block")
+	}
+	if c.SuggestionsEnabled() {
+		// Suggestions capture the semantic classifier's vectors and cluster in
+		// its embedding space, so they need it to be the primary classifier.
+		if c.Semantic == nil || (c.Classifier != "" && c.Classifier != ComplexityClassifierSemantic) {
+			return fmt.Errorf("complexity suggestions require the semantic classifier: a semantic config block, with classifier %q", ComplexityClassifierSemantic)
+		}
+		if c.Suggestions.Provider == "" && c.LLM == nil {
+			return fmt.Errorf("complexity suggestions need a model: set suggestions provider and model, or an llm config block")
+		}
 	}
 	return nil
 }
@@ -825,6 +1440,14 @@ func (c *ComplexityAnalyzerConfig) Normalized() ComplexityAnalyzerConfig {
 	if tierBoundaries == (ComplexityTierBoundaries{}) {
 		tierBoundaries = DefaultComplexityTierBoundaries()
 	}
+	classifier := strings.ToLower(strings.TrimSpace(c.Classifier))
+	if classifier == "" {
+		classifier = ComplexityClassifierSemantic
+	}
+	decision := c.Decision.normalized()
+	if decision == nil && (classifier == ComplexityClassifierDecision || (c.Semantic != nil && c.Semantic.Fallback == ComplexitySemanticFallbackDecision)) {
+		decision = (&ComplexityDecisionConfig{}).normalized()
+	}
 	return ComplexityAnalyzerConfig{
 		TierBoundaries: tierBoundaries,
 		Keywords: ComplexityEditableKeywordConfig{
@@ -832,9 +1455,12 @@ func (c *ComplexityAnalyzerConfig) Normalized() ComplexityAnalyzerConfig {
 			MediumKeywords:  normalizeComplexityKeywordList(c.Keywords.MediumKeywords),
 			ComplexKeywords: normalizeComplexityKeywordList(c.Keywords.ComplexKeywords),
 		},
+		Classifier:           classifier,
 		Semantic:             c.Semantic.normalized(),
+		Decision:             decision,
 		LLM:                  c.LLM.normalized(),
 		Session:              c.Session.normalized(),
+		Suggestions:          c.Suggestions.normalized().withModels(c.LLM.normalized(), decision),
 		ConfigHashes:         c.ConfigHashes,
 		EmbeddingFingerprint: c.EmbeddingFingerprint,
 	}
@@ -919,16 +1545,23 @@ func MergeComplexityAnalyzerConfig(base, file *ComplexityAnalyzerConfig) (*Compl
 		}
 	}
 
+	mergedClassifier := normalizedBase.Classifier
+	if file.Classifier != "" {
+		mergedClassifier = normalizedFile.Classifier
+	}
 	merged := ComplexityAnalyzerConfig{
 		TierBoundaries: normalizedFile.TierBoundaries,
+		Classifier:     mergedClassifier,
 		Keywords: ComplexityEditableKeywordConfig{
 			SimpleKeywords:  mergeComplexityKeywordLists(normalizedBase.Keywords.SimpleKeywords, normalizedFile.Keywords.SimpleKeywords),
 			MediumKeywords:  mergeComplexityKeywordLists(normalizedBase.Keywords.MediumKeywords, normalizedFile.Keywords.MediumKeywords),
 			ComplexKeywords: mergeComplexityKeywordLists(normalizedBase.Keywords.ComplexKeywords, normalizedFile.Keywords.ComplexKeywords),
 		},
 		Semantic:             mergeComplexitySemanticConfig(normalizedBase.Semantic, normalizedFile.Semantic),
+		Decision:             mergeComplexityDecisionConfig(normalizedBase.Decision, normalizedFile.Decision),
 		LLM:                  mergeComplexityLLMConfig(normalizedBase.LLM, normalizedFile.LLM),
 		Session:              mergeComplexitySessionConfig(normalizedBase.Session, normalizedFile.Session),
+		Suggestions:          mergeComplexitySuggestionsConfig(normalizedBase.Suggestions, normalizedFile.Suggestions),
 		ConfigHashes:         normalizedFile.ConfigHashes,
 		EmbeddingFingerprint: normalizedBase.EmbeddingFingerprint,
 	}
@@ -948,6 +1581,14 @@ func mergeComplexitySemanticConfig(base, file *ComplexitySemanticConfig) *Comple
 	return file.normalized()
 }
 
+// mergeComplexityDecisionConfig overlays file decision-model settings. A nil file section keeps the base.
+func mergeComplexityDecisionConfig(base, file *ComplexityDecisionConfig) *ComplexityDecisionConfig {
+	if file == nil {
+		return base.normalized()
+	}
+	return file.normalized()
+}
+
 // mergeComplexityLLMConfig overlays the file llm settings. A nil file section
 // keeps the base untouched.
 func mergeComplexityLLMConfig(base, file *ComplexityLLMConfig) *ComplexityLLMConfig {
@@ -960,6 +1601,15 @@ func mergeComplexityLLMConfig(base, file *ComplexityLLMConfig) *ComplexityLLMCon
 // mergeComplexitySessionConfig overlays file session settings. A nil file
 // section keeps the persisted setting untouched.
 func mergeComplexitySessionConfig(base, file *ComplexitySessionConfig) *ComplexitySessionConfig {
+	if file == nil {
+		return base.normalized()
+	}
+	return file.normalized()
+}
+
+// mergeComplexitySuggestionsConfig overlays file suggestion settings. A nil
+// file section keeps the persisted setting untouched.
+func mergeComplexitySuggestionsConfig(base, file *ComplexitySuggestionsConfig) *ComplexitySuggestionsConfig {
 	if file == nil {
 		return base.normalized()
 	}
@@ -1002,6 +1652,14 @@ func MergeComplexityAnalyzerConfigByHashes(base, file *ComplexityAnalyzerConfig)
 		merged.Keywords.ComplexKeywords = mergeComplexityKeywordLists(merged.Keywords.ComplexKeywords, normalizedFile.Keywords.ComplexKeywords)
 		merged.ConfigHashes.ComplexKeywords = normalizedFile.ConfigHashes.ComplexKeywords
 	}
+	if file.Classifier != "" && merged.ConfigHashes.ClassifierSettings != normalizedFile.ConfigHashes.ClassifierSettings {
+		merged.Classifier = normalizedFile.Classifier
+		merged.ConfigHashes.ClassifierSettings = normalizedFile.ConfigHashes.ClassifierSettings
+	}
+	if file.Decision != nil && (merged.Decision == nil || merged.ConfigHashes.DecisionSettings != normalizedFile.ConfigHashes.DecisionSettings) {
+		merged.Decision = normalizedFile.Decision.normalized()
+		merged.ConfigHashes.DecisionSettings = normalizedFile.ConfigHashes.DecisionSettings
+	}
 	// A config.json without a semantic section leaves DB semantic state (and its
 	// section hash) untouched: the section is optional, so absence means "no
 	// opinion", not removal.
@@ -1026,6 +1684,13 @@ func MergeComplexityAnalyzerConfigByHashes(base, file *ComplexityAnalyzerConfig)
 		if merged.Session == nil || merged.ConfigHashes.SessionSettings != normalizedFile.ConfigHashes.SessionSettings {
 			merged.Session = normalizedFile.Session.normalized()
 			merged.ConfigHashes.SessionSettings = normalizedFile.ConfigHashes.SessionSettings
+		}
+	}
+	// Suggestions follow the same optional-section rule.
+	if normalizedFile.Suggestions != nil {
+		if merged.Suggestions == nil || merged.ConfigHashes.SuggestionsSettings != normalizedFile.ConfigHashes.SuggestionsSettings {
+			merged.Suggestions = normalizedFile.Suggestions.normalized()
+			merged.ConfigHashes.SuggestionsSettings = normalizedFile.ConfigHashes.SuggestionsSettings
 		}
 	}
 	normalizedMerged := merged.Normalized()
@@ -1107,18 +1772,31 @@ func decodeComplexitySemanticConfigRow(data []byte) (*complexitySemanticConfigRe
 
 // encodeComplexitySemanticConfigRow writes the semantic row.
 func encodeComplexitySemanticConfigRow(config ComplexityAnalyzerConfig) ([]byte, error) {
+	decision, minConfidence := config.Decision, 0.0
+	if decision != nil {
+		stripped := *decision
+		minConfidence, stripped.MinConfidence = stripped.MinConfidence, 0
+		decision = &stripped
+	}
 	record := complexitySemanticConfigRecord{
-		Keywords: config.Keywords,
-		Semantic: config.Semantic,
-		LLM:      config.LLM,
-		Session:  config.Session,
+		Keywords:              config.Keywords,
+		Classifier:            config.Classifier,
+		Semantic:              config.Semantic,
+		Decision:              decision,
+		DecisionMinConfidence: minConfidence,
+		LLM:                   config.LLM,
+		Session:               config.Session,
+		Suggestions:           config.Suggestions,
 		ConfigHashes: complexitySemanticRowHashes{
-			SimpleKeywords:   config.ConfigHashes.SimpleKeywords,
-			MediumKeywords:   config.ConfigHashes.MediumKeywords,
-			ComplexKeywords:  config.ConfigHashes.ComplexKeywords,
-			SemanticSettings: config.ConfigHashes.SemanticSettings,
-			LLMSettings:      config.ConfigHashes.LLMSettings,
-			SessionSettings:  config.ConfigHashes.SessionSettings,
+			SimpleKeywords:      config.ConfigHashes.SimpleKeywords,
+			MediumKeywords:      config.ConfigHashes.MediumKeywords,
+			ComplexKeywords:     config.ConfigHashes.ComplexKeywords,
+			SemanticSettings:    config.ConfigHashes.SemanticSettings,
+			ClassifierSettings:  config.ConfigHashes.ClassifierSettings,
+			DecisionSettings:    config.ConfigHashes.DecisionSettings,
+			LLMSettings:         config.ConfigHashes.LLMSettings,
+			SessionSettings:     config.ConfigHashes.SessionSettings,
+			SuggestionsSettings: config.ConfigHashes.SuggestionsSettings,
 		},
 		EmbeddingFingerprint: config.EmbeddingFingerprint,
 	}
@@ -1137,19 +1815,31 @@ func applyComplexitySemanticConfigRow(base *ComplexityAnalyzerConfig, row *compl
 	}
 	combined := *base
 	combined.Keywords = row.Keywords
+	combined.Classifier = row.Classifier
 	combined.Semantic = row.Semantic
+	combined.Decision = row.Decision
+	if row.Decision != nil {
+		decision := *row.Decision
+		decision.MinConfidence = row.DecisionMinConfidence
+		combined.Decision = &decision
+	}
 	combined.LLM = row.LLM
 	combined.Session = row.Session
+	combined.Suggestions = row.Suggestions
 	combined.ConfigHashes.SimpleKeywords = row.ConfigHashes.SimpleKeywords
 	combined.ConfigHashes.MediumKeywords = row.ConfigHashes.MediumKeywords
 	combined.ConfigHashes.ComplexKeywords = row.ConfigHashes.ComplexKeywords
 	combined.ConfigHashes.SemanticSettings = row.ConfigHashes.SemanticSettings
+	combined.ConfigHashes.ClassifierSettings = row.ConfigHashes.ClassifierSettings
+	combined.ConfigHashes.DecisionSettings = row.ConfigHashes.DecisionSettings
 	combined.ConfigHashes.LLMSettings = row.ConfigHashes.LLMSettings
 	combined.ConfigHashes.SessionSettings = row.ConfigHashes.SessionSettings
+	combined.ConfigHashes.SuggestionsSettings = row.ConfigHashes.SuggestionsSettings
 	combined.EmbeddingFingerprint = row.EmbeddingFingerprint
 	return &combined
 }
 
+// normalizeComplexityKeywordList trims, lowercases, sorts, and deduplicates phrases.
 func normalizeComplexityKeywordList(values []string) []string {
 	if len(values) == 0 {
 		return nil
@@ -1172,6 +1862,7 @@ func normalizeComplexityKeywordList(values []string) []string {
 	return out
 }
 
+// mergeComplexityKeywordLists combines base and overlay phrases without duplicates.
 func mergeComplexityKeywordLists(base, overlay []string) []string {
 	values := make([]string, 0, len(base)+len(overlay))
 	values = append(values, base...)

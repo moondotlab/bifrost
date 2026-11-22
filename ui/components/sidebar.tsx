@@ -1,56 +1,4 @@
-import {
-	ArrowUpRight,
-	BadgeCheck,
-	BadgeInfo,
-	BookOpenText,
-	BookUser,
-	Boxes,
-	BoxIcon,
-	Building,
-	Building2,
-	ChartColumnBig,
-	ChevronsLeftRightEllipsis,
-	CircuitBoard,
-	Construction,
-	DatabaseZap,
-	Flag,
-	FolderGit,
-	SquareKanban,
-	Gavel,
-	GitCompareArrows,
-	Globe,
-	Hexagon,
-	History,
-	KeyRound,
-	Landmark,
-	LaptopMinimalCheck,
-	LayoutGrid,
-	Logs,
-	Megaphone,
-	Network,
-	Palette,
-	PanelLeftClose,
-	PanelLeftOpen,
-	Plug,
-	Puzzle,
-	ScrollText,
-	Search,
-	SearchCheck,
-	Settings,
-	Settings2Icon,
-	ShieldCheck,
-	Shuffle,
-	Siren,
-	SlidersHorizontal,
-	Telescope,
-	ToolCase,
-	TrendingUp,
-	UserRoundCheck,
-	Users,
-	Wallet,
-	WalletCards,
-	Webhook,
-} from "lucide-react";
+import { ArrowUpRight, PanelLeftClose, PanelLeftOpen, Search } from "lucide-react";
 
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
@@ -71,16 +19,18 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { HIDDEN_UNTIL_NAV_COOKIE, REMIND_LATER_COOKIE, useOnboardingChecklist } from "@/hooks/useOnboardingChecklist";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { IS_ENTERPRISE } from "@/lib/constants/config";
-import { useT, type MessageKey } from "@/lib/i18n";
 import { useBranding } from "@/lib/hooks/useBranding";
-import { useGetCoreConfigQuery, useGetLatestReleaseQuery, useGetVersionQuery } from "@/lib/store";
+import { useGetCoreConfigQuery, useGetLatestReleaseQuery, useGetVersionQuery, useIsAuthEnabledQuery } from "@/lib/store";
+import { withBasePath } from "@/lib/utils/basePath";
 import PoweredByBifrost from "@enterprise/components/branding/poweredByBifrost";
-import { RbacOperation, RbacResource, useRbac } from "@enterprise/lib";
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 import { ChevronRight } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useCookies } from "react-cookie";
+import { Trans, useTranslation } from "react-i18next";
+import { preserveTimeFilters } from "./navigation/navItem";
+import { getNavItemHref, type NavItem, useNavItems } from "./navigation/navItems";
 import { Badge } from "./ui/badge";
 import { PromoCardStack } from "./ui/promoCardStack";
 
@@ -91,71 +41,14 @@ const PRODUCTION_SETUP_DISMISSED_COOKIE = "bifrost_production_setup_dismissed";
 // doesn't affect whether the floating widget itself reappears on next nav.
 const ONBOARDING_CARD_DISMISSED_COOKIE = "bifrost_onboarding_card_dismissed";
 
-// Custom MCP Icon Component
-const MCPIcon = ({ className }: { className?: string }) => (
-	<svg
-		className={className}
-		fill="currentColor"
-		fillRule="evenodd"
-		height="1em"
-		style={{ flex: "none", lineHeight: 1 }}
-		viewBox="0 0 24 24"
-		width="1em"
-		xmlns="http://www.w3.org/2000/svg"
-		aria-label="MCP clients icon"
-	>
-		<title>MCP clients icon</title>
-		<path d="M15.688 2.343a2.588 2.588 0 00-3.61 0l-9.626 9.44a.863.863 0 01-1.203 0 .823.823 0 010-1.18l9.626-9.44a4.313 4.313 0 016.016 0 4.116 4.116 0 011.204 3.54 4.3 4.3 0 013.609 1.18l.05.05a4.115 4.115 0 010 5.9l-8.706 8.537a.274.274 0 000 .393l1.788 1.754a.823.823 0 010 1.18.863.863 0 01-1.203 0l-1.788-1.753a1.92 1.92 0 010-2.754l8.706-8.538a2.47 2.47 0 000-3.54l-.05-.049a2.588 2.588 0 00-3.607-.003l-7.172 7.034-.002.002-.098.097a.863.863 0 01-1.204 0 .823.823 0 010-1.18l7.273-7.133a2.47 2.47 0 00-.003-3.537z" />
-		<path d="M14.485 4.703a.823.823 0 000-1.18.863.863 0 00-1.204 0l-7.119 6.982a4.115 4.115 0 000 5.9 4.314 4.314 0 006.016 0l7.12-6.982a.823.823 0 000-1.18.863.863 0 00-1.204 0l-7.119 6.982a2.588 2.588 0 01-3.61 0 2.47 2.47 0 010-3.54l7.12-6.982z" />
-	</svg>
-);
+// Main navigation items
 
-// Sidebar item interface
-interface SidebarItem {
-	id: string;
-	title: string;
-	url: string;
-	icon: React.ComponentType<{ className?: string }>;
-	description: string;
-	isAllowed?: boolean;
-	hasAccess: boolean;
-	subItems?: SidebarItem[];
-	tag?: string;
-	new?: boolean;
-	isExternal?: boolean;
-	queryParam?: string; // Optional: for tab-based subitems (e.g., "client-settings")
-	testId?: string; // Optional: pin the data-testid slug across a rename (else derived from title)
-}
-
-const getSidebarItemHref = (item: Pick<SidebarItem, "url" | "queryParam">) => {
-	return item.queryParam ? `${item.url}?tab=${item.queryParam}` : item.url;
-};
+const newBadgeClassName =
+	"relative overflow-hidden px-1.5 py-0 text-[10px] leading-4 group-data-[collapsible=icon]:hidden after:pointer-events-none after:absolute after:inset-y-0 after:-left-full after:w-full after:skew-x-[-18deg] after:bg-gradient-to-r after:from-transparent after:via-primary/25 after:to-transparent after:opacity-0 after:content-[''] after:animate-[sidebar-new-badge-shine_1200ms_cubic-bezier(0.22,1,0.36,1)_260ms_both]";
 
 const slug = (s: string) => s.toLowerCase().replace(/\s+/g, "-");
 
-const itemId = (item: Pick<SidebarItem, "id" | "title">) => item.id || item.title;
-
-const TimeFilterPages = new Set(["/workspace/dashboard", "/workspace/logs", "/workspace/mcp-logs"]);
-
-const preserveTimeFilters = (baseHref: string, subItemUrl: string, pathname: string, search: string): string => {
-	if (TimeFilterPages.has(subItemUrl) && TimeFilterPages.has(pathname)) {
-		const currentParams = new URLSearchParams(search);
-		const startTime = currentParams.get("start_time");
-		const endTime = currentParams.get("end_time");
-		const period = currentParams.get("period");
-		if ((startTime && endTime) || period) {
-			const params = new URLSearchParams();
-			if (startTime) params.set("start_time", startTime);
-			if (endTime) params.set("end_time", endTime);
-			if (period) params.set("period", period);
-			const sep = baseHref.includes("?") ? "&" : "?";
-			return `${baseHref}${sep}${params.toString()}`;
-		}
-	}
-	return baseHref;
-};
-
-const SidebarItemView = ({
+const NavItemView = ({
 	item,
 	isActive,
 	isExternal,
@@ -168,7 +61,7 @@ const SidebarItemView = ({
 	expandSidebar,
 	highlightedUrl,
 }: {
-	item: SidebarItem;
+	item: NavItem;
 	isActive: boolean;
 	isExternal?: boolean;
 	isWebSocketConnected: boolean;
@@ -180,6 +73,7 @@ const SidebarItemView = ({
 	expandSidebar: () => void;
 	highlightedUrl?: string;
 }) => {
+	const { t } = useTranslation("shell");
 	const [flyoutOpen, setFlyoutOpen] = useState(false);
 	const flyoutCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const openFlyout = () => {
@@ -202,7 +96,8 @@ const SidebarItemView = ({
 	const isRouteMatch = (url: string) => {
 		// Exact-match base paths that have sibling tab routes nested under them, so the base
 		// tab isn't also highlighted when a child tab (e.g. /settings) is active.
-		if (url === "/workspace/custom-pricing" || url === "/workspace/adaptive-routing") return pathname === url;
+		if (url === "/workspace/custom-pricing" || url === "/workspace/adaptive-routing" || url === "/workspace/agent-gateway")
+			return pathname === url;
 		// Avoid double-highlighting with "/workspace/mcp-registry/library"
 		if (url === "/workspace/mcp-registry") return !pathname.startsWith("/workspace/mcp-registry/library") && pathname.startsWith(url);
 		return pathname.startsWith(url);
@@ -231,23 +126,30 @@ const SidebarItemView = ({
 
 	const isHighlighted = !hasSubItems && highlightedUrl === item.url;
 
-	const buttonClassName = `group/nav-item relative h-7.5 cursor-pointer rounded-sm border px-3 transition-all duration-200 ${
+	const buttonClassName = `group/nav-item relative h-7 cursor-pointer rounded-sm border px-2 transition-all duration-200 ${
 		isHighlighted
 			? "bg-sidebar-accent text-accent-foreground border-primary/20"
 			: isActive || isAnySubItemActive
 				? "bg-sidebar-accent text-primary border-primary/20"
 				: item.hasAccess
-					? "hover:bg-sidebar-accent hover:text-accent-foreground border-transparent text-slate-500 dark:text-zinc-400"
+					? "hover:bg-sidebar-accent hover:text-accent-foreground border-transparent text-slate-600 dark:text-zinc-400"
 					: "hover:bg-destructive/5 hover:text-muted-foreground text-muted-foreground cursor-not-allowed border-transparent"
 	} `;
 
 	const innerContent = (
-		<div className="flex w-full items-center justify-between">
-			<div className="flex w-full items-center gap-2">
-				<item.icon className={`h-4 w-4 shrink-0 ${isActive || isAnySubItemActive ? "text-primary" : "text-muted-foreground"}`} />
-				<span className={`text-sm group-data-[collapsible=icon]:hidden ${isActive || isAnySubItemActive ? "font-medium" : "font-normal"}`}>
+		<div className="flex w-full min-w-0 items-center justify-between">
+			<div className="flex w-full min-w-0 items-center gap-2.5">
+				<item.icon className={`h-3.5 w-3.5 shrink-0 ${isActive || isAnySubItemActive ? "stroke-2" : "stroke-[1.5]"}`} />
+				<span
+					className={`min-w-0 truncate text-[13px] group-data-[collapsible=icon]:hidden ${isActive || isAnySubItemActive ? "font-medium" : "font-normal"}`}
+				>
 					{item.title}
 				</span>
+				{item.new && (
+					<Badge data-new-badge="true" className={`${newBadgeClassName} ml-auto ${hasSubItems ? "mr-2" : ""}`}>
+						{t("sidebar.newBadge")}
+					</Badge>
+				)}
 				{item.tag && (
 					<Badge variant="secondary" className="text-muted-foreground ml-auto text-xs group-data-[collapsible=icon]:hidden">
 						{item.tag}
@@ -278,14 +180,21 @@ const SidebarItemView = ({
 				tooltip={isSidebarCollapsed ? undefined : item.title}
 				className={buttonClassName}
 				onClick={handleClick}
-				data-testid={`sidebar-item-btn-${slug(itemId(item))}`}
+				aria-label={item.title}
+				data-testid={`sidebar-item-btn-${item.testId ?? slug(item.title)}`}
 			>
 				{innerContent}
 			</SidebarMenuButton>
 		);
 	} else if (!item.hasAccess) {
 		menuButton = (
-			<SidebarMenuButton tooltip={item.title} data-nav-url={item.url} className={buttonClassName}>
+			<SidebarMenuButton
+				tooltip={item.title}
+				data-nav-url={item.url}
+				className={buttonClassName}
+				aria-disabled="true"
+				aria-label={item.title}
+			>
 				{innerContent}
 			</SidebarMenuButton>
 		);
@@ -296,6 +205,7 @@ const SidebarItemView = ({
 					href={item.url}
 					target="_blank"
 					rel="noopener noreferrer"
+					aria-label={item.title}
 					data-nav-url={item.url}
 					onClick={isSidebarCollapsed ? (e: React.MouseEvent) => e.stopPropagation() : undefined}
 				>
@@ -309,6 +219,7 @@ const SidebarItemView = ({
 				<Link
 					to={item.url}
 					preload="intent"
+					aria-label={item.title}
 					data-nav-url={item.url}
 					onClick={isSidebarCollapsed ? (e: React.MouseEvent) => e.stopPropagation() : undefined}
 				>
@@ -319,12 +230,15 @@ const SidebarItemView = ({
 	}
 
 	return (
-		<SidebarMenuItem key={itemId(item)}>
+		<SidebarMenuItem key={item.id}>
 			{isSidebarCollapsed && hasSubItems ? (
 				<Popover open={flyoutOpen} onOpenChange={setFlyoutOpen}>
-					<PopoverTrigger asChild onMouseEnter={openFlyout} onMouseLeave={closeFlyout}>
-						<div data-testid={`sidebar-flyout-trigger-${slug(itemId(item))}`}>{menuButton}</div>
-					</PopoverTrigger>
+					<div data-testid={`sidebar-flyout-trigger-${item.testId ?? slug(item.title)}`}>
+						{/* The trigger must be the button itself: aria-haspopup/aria-expanded are invalid on a role-less div. */}
+						<PopoverTrigger asChild onMouseEnter={openFlyout} onMouseLeave={closeFlyout}>
+							{menuButton}
+						</PopoverTrigger>
+					</div>
 					<PopoverContent
 						side="right"
 						align="start"
@@ -332,21 +246,19 @@ const SidebarItemView = ({
 						className="w-48 p-1"
 						onMouseEnter={openFlyout}
 						onMouseLeave={closeFlyout}
-						data-testid={`sidebar-flyout-content-${slug(itemId(item))}`}
+						data-testid={`sidebar-flyout-content-${item.testId ?? slug(item.title)}`}
 					>
-						<div className="text-muted-foreground px-2 py-1.5 text-xs font-medium">{item.title}</div>
+						<div className="text-muted-foreground px-2 py-1.5 text-xs font-normal">{item.title}</div>
 						{item.subItems?.map((subItem) => {
-							const baseHref = getSidebarItemHref(subItem);
+							const baseHref = getNavItemHref(subItem);
 							const href = preserveTimeFilters(baseHref, subItem.url, pathname, search);
 							const isSubItemActive = subItem.queryParam ? pathname === subItem.url : isRouteMatch(subItem.url);
 							const SubItemIcon = subItem.icon;
 							const subSlug = subItem.testId ?? slug(subItem.title);
 							const inner = (
-								<div className="flex items-center gap-2">
-									{SubItemIcon && <SubItemIcon className={`h-3.5 w-3.5 ${isSubItemActive ? "text-primary" : "text-muted-foreground"}`} />}
-									<span className={`text-sm ${isSubItemActive ? "text-primary font-medium" : "text-slate-500 dark:text-zinc-400"}`}>
-										{subItem.title}
-									</span>
+								<div className="flex min-w-0 items-center gap-2.5">
+									{SubItemIcon && <SubItemIcon className={`h-3.5 w-3.5 shrink-0 ${isSubItemActive ? "stroke-2" : "stroke-[1.5]"}`} />}
+									<span className={`min-w-0 truncate text-[13px] ${isSubItemActive ? "font-medium" : "font-normal"}`}>{subItem.title}</span>
 									{subItem.tag && (
 										<Badge variant="secondary" className="text-muted-foreground ml-auto text-xs">
 											{subItem.tag}
@@ -355,10 +267,16 @@ const SidebarItemView = ({
 								</div>
 							);
 							return (
-								<div key={itemId(subItem)} data-testid={`sidebar-flyout-subitem-${subSlug}`} onClick={() => setFlyoutOpen(false)}>
+								<div
+									key={subItem.title}
+									data-testid={`sidebar-flyout-subitem-${subSlug}`}
+									role="presentation"
+									onClick={() => setFlyoutOpen(false)}
+								>
 									{subItem.hasAccess === false ? (
 										<div
 											data-testid={`sidebar-subitem-disabled-${subSlug}`}
+											aria-disabled="true"
 											className="text-muted-foreground hover:bg-destructive/5 flex h-7 cursor-not-allowed items-center rounded-sm px-2"
 										>
 											{inner}
@@ -368,7 +286,7 @@ const SidebarItemView = ({
 											to={href}
 											preload="intent"
 											data-testid={`sidebar-subitem-link-${subSlug}`}
-											className={`flex h-7 items-center rounded-sm px-2 ${isSubItemActive ? "bg-sidebar-accent" : "hover:bg-sidebar-accent"}`}
+											className={`flex h-7 items-center rounded-sm px-2 ${isSubItemActive ? "bg-sidebar-accent text-primary" : "hover:bg-sidebar-accent hover:text-accent-foreground text-slate-600 dark:text-zinc-400"}`}
 										>
 											{inner}
 										</Link>
@@ -383,8 +301,8 @@ const SidebarItemView = ({
 			)}
 			{hasSubItems && isExpanded && (
 				<SidebarMenuSub className="border-sidebar-border mt-1 ml-4 space-y-0.5 border-l pl-2">
-					{item.subItems?.map((subItem: SidebarItem) => {
-						const baseHref = getSidebarItemHref(subItem);
+					{item.subItems?.map((subItem: NavItem) => {
+						const baseHref = getNavItemHref(subItem);
 						const subItemHref = preserveTimeFilters(baseHref, subItem.url, pathname, search);
 						// For query param based subitems, check if tab matches
 						const isSubItemActive = subItem.queryParam ? pathname === subItem.url : isRouteMatch(subItem.url);
@@ -397,12 +315,12 @@ const SidebarItemView = ({
 									? "bg-sidebar-accent text-primary font-medium"
 									: subItem.hasAccess === false
 										? "hover:bg-destructive/5 hover:text-muted-foreground text-muted-foreground cursor-not-allowed border-transparent"
-										: "hover:bg-sidebar-accent hover:text-accent-foreground text-slate-500 dark:text-zinc-400"
+										: "hover:bg-sidebar-accent hover:text-accent-foreground text-slate-600 dark:text-zinc-400"
 						}`;
 						const subInner = (
-							<div className="flex w-full items-center gap-2">
-								{SubItemIcon && <SubItemIcon className={`h-3.5 w-3.5 ${isSubItemActive ? "text-primary" : "text-muted-foreground"}`} />}
-								<span className={`text-sm ${isSubItemActive ? "font-medium" : "font-normal"}`}>{subItem.title}</span>
+							<div className="flex w-full min-w-0 items-center gap-2.5">
+								{SubItemIcon && <SubItemIcon className={`h-3.5 w-3.5 shrink-0 ${isSubItemActive ? "stroke-2" : "stroke-[1.5]"}`} />}
+								<span className={`min-w-0 truncate text-[13px] ${isSubItemActive ? "font-medium" : "font-normal"}`}>{subItem.title}</span>
 								{subItem.tag && (
 									<Badge variant="secondary" className="text-muted-foreground ml-auto text-xs">
 										{subItem.tag}
@@ -411,12 +329,13 @@ const SidebarItemView = ({
 							</div>
 						);
 						return (
-							<SidebarMenuSubItem key={itemId(subItem)}>
+							<SidebarMenuSubItem key={subItem.id}>
 								{subItem.hasAccess === false ? (
 									<SidebarMenuSubButton
 										data-nav-url={subItemHref}
 										data-testid={`sidebar-subitem-disabled-${subItem.testId ?? slug(subItem.title)}`}
 										className={subItemClassName}
+										aria-disabled="true"
 									>
 										{subInner}
 									</SidebarMenuSubButton>
@@ -480,8 +399,9 @@ const compareVersions = (v1: string, v2: string): number => {
 	return 0;
 };
 
+/** The workspace navigation sidebar. */
 export default function AppSidebar() {
-	const t = useT();
+	const { t } = useTranslation("shell");
 	const pathname = useLocation({ select: (l) => l.pathname });
 	const search = useLocation({ select: (l) => l.searchStr ?? "" });
 	const tsNavigate = useNavigate();
@@ -505,54 +425,11 @@ export default function AppSidebar() {
 	const { data: latestRelease } = useGetLatestReleaseQuery(undefined, {
 		skip: !mounted, // Only fetch after component is mounted
 	});
-	const hasLogsAccess = useRbac(RbacResource.Logs, RbacOperation.View);
-	const hasObservabilityAccess = useRbac(RbacResource.Observability, RbacOperation.View);
-	// Alerting is currently surfaced under the existing governance permission
-	// until enterprise alerting gets its own RBAC resource.
-	const hasAlertingAccess = useRbac(RbacResource.Governance, RbacOperation.View);
-	const hasDashboardAccess = useRbac(RbacResource.Dashboard, RbacOperation.View);
-	const hasModelProvidersAccess = useRbac(RbacResource.ModelProvider, RbacOperation.View);
-	const hasMCPGatewayAccess = useRbac(RbacResource.MCPGateway, RbacOperation.View);
-	const hasVirtualMCPsAccess = useRbac(RbacResource.VirtualMCPs, RbacOperation.View);
-	const hasMCPLogsAccess = useRbac(RbacResource.MCPLogs, RbacOperation.View);
-	const hasPluginsAccess = useRbac(RbacResource.Plugins, RbacOperation.View);
-	const hasUsersAccess = useRbac(RbacResource.Users, RbacOperation.View);
-	const hasUserProvisioningAccess = useRbac(RbacResource.UserProvisioning, RbacOperation.View);
-	const hasAuditLogsAccess = useRbac(RbacResource.AuditLogs, RbacOperation.View);
-	const hasCustomersAccess = useRbac(RbacResource.Customers, RbacOperation.View);
-	const hasTeamsAccess = useRbac(RbacResource.Teams, RbacOperation.View);
-	const hasBusinessUnitsAccess = useRbac(RbacResource.UserProvisioning, RbacOperation.View);
-	const hasRbacAccess = useRbac(RbacResource.RBAC, RbacOperation.View);
-	const hasVirtualKeysAccess = useRbac(RbacResource.VirtualKeys, RbacOperation.View);
-	const hasGovernanceLegacyAccess = useRbac(RbacResource.Governance, RbacOperation.View);
-	const hasRoutingRulesAccess = useRbac(RbacResource.RoutingRules, RbacOperation.View);
-	const hasGuardrailsProvidersAccess = useRbac(RbacResource.GuardrailsProviders, RbacOperation.View);
-	const hasGuardrailsConfigAccess = useRbac(RbacResource.GuardrailsConfig, RbacOperation.View);
-	const hasCircuitBreakerAccess = useRbac(RbacResource.CircuitBreaker, RbacOperation.View);
-	const hasClusterConfigAccess = useRbac(RbacResource.Cluster, RbacOperation.View);
-	const isAdaptiveRoutingAllowed = useRbac(RbacResource.AdaptiveRouter, RbacOperation.View);
-	const hasSettingsAccess = useRbac(RbacResource.Settings, RbacOperation.View);
-	const hasFeatureFlagsAccess = useRbac(RbacResource.FeatureFlags, RbacOperation.View);
-	const hasAPIKeyAccess = useRbac(RbacResource.APIKeys, RbacOperation.View);
-	const hasPromptRepositoryAccess = useRbac(RbacResource.PromptRepository, RbacOperation.View);
-	const hasSkillsRepositoryAccess = useRbac(RbacResource.SkillsRepository, RbacOperation.View);
-	const hasDevicesAccess = useRbac(RbacResource.Devices, RbacOperation.View);
-	const hasInventoryAccess = useRbac(RbacResource.Inventory, RbacOperation.View);
-	const hasEdgeConfigAccess = useRbac(RbacResource.EdgeConfig, RbacOperation.View);
-	const hasAnyEdgeControlAccess = hasDevicesAccess || hasInventoryAccess || hasEdgeConfigAccess;
-	const hasAccessProfilesAccess = useRbac(RbacResource.AccessProfiles, RbacOperation.View);
-	const hasProjectsAccess = useRbac(RbacResource.Projects, RbacOperation.View);
-	const hasAnyGovernanceAccess =
-		hasVirtualKeysAccess ||
-		hasTeamsAccess ||
-		hasUsersAccess ||
-		hasCustomersAccess ||
-		hasBusinessUnitsAccess ||
-		hasRbacAccess ||
-		hasAccessProfilesAccess ||
-		hasProjectsAccess ||
-		hasGovernanceLegacyAccess;
 	const { data: coreConfig } = useGetCoreConfigQuery({});
+	// OSS setup lock: true while dashboard auth is not configured, so management APIs
+	// accept only the setup token. Drives the non-dismissible setup card below.
+	const { data: authState } = useIsAuthEnabledQuery(undefined, { skip: IS_ENTERPRISE });
+	const setupRequired = !IS_ENTERPRISE && !!authState?.setup_required;
 	const isDbConnected = coreConfig?.is_db_connected ?? false;
 	const envLabel = coreConfig?.env_label ?? null;
 
@@ -580,409 +457,9 @@ export default function AppSidebar() {
 		removeCookie(REMIND_LATER_COOKIE, { path: "/" });
 	}, [removeCookie]);
 
-	const items = useMemo(() => {
-		const nav = (
-			id: string,
-			titleKey: MessageKey,
-			descriptionKey: MessageKey,
-			rest: Omit<SidebarItem, "id" | "title" | "description">,
-		): SidebarItem => ({
-			id,
-			title: t(titleKey),
-			description: t(descriptionKey),
-			...rest,
-		});
+	const items = useNavItems();
 
-		return [
-			nav("Observability", "nav.observability", "nav.observabilityDescription", {
-				url: "/workspace/logs",
-				icon: Telescope,
-				hasAccess: hasLogsAccess,
-				subItems: [
-					nav("Dashboard", "nav.dashboard", "nav.dashboardDescription", {
-						url: "/workspace/dashboard",
-						icon: ChartColumnBig,
-						hasAccess: hasDashboardAccess,
-					}),
-					nav("LLM Logs", "nav.llmLogs", "nav.llmLogsDescription", {
-						url: "/workspace/logs",
-						icon: Logs,
-						hasAccess: hasLogsAccess,
-					}),
-					nav("MCP Logs", "nav.mcpLogs", "nav.mcpLogsDescription", {
-						url: "/workspace/mcp-logs",
-						icon: MCPIcon,
-						hasAccess: hasMCPLogsAccess,
-					}),
-					nav("Connectors", "nav.connectors", "nav.connectorsDescription", {
-						url: "/workspace/observability",
-						icon: ChevronsLeftRightEllipsis,
-						hasAccess: hasObservabilityAccess,
-					}),
-					nav("Logs Settings", "nav.logsSettings", "nav.logsSettingsDescription", {
-						url: "/workspace/config/logging",
-						icon: Settings,
-						hasAccess: hasSettingsAccess,
-					}),
-				],
-			}),
-			nav("Models", "nav.models", "nav.modelsDescription", {
-				url: "/workspace/providers",
-				icon: BoxIcon,
-				hasAccess: true,
-				subItems: [
-					nav("Model Catalog", "nav.modelCatalog", "nav.modelCatalogDescription", {
-						url: "/workspace/model-catalog",
-						icon: LayoutGrid,
-						hasAccess: hasModelProvidersAccess,
-					}),
-					nav("Model Providers", "nav.modelProviders", "nav.modelProvidersDescription", {
-						url: "/workspace/providers",
-						icon: Boxes,
-						hasAccess: hasModelProvidersAccess,
-					}),
-					nav("Budgets & Limits", "nav.budgetsLimits", "nav.budgetsLimitsDescription", {
-						url: "/workspace/model-limits",
-						icon: Wallet,
-						hasAccess: hasGovernanceLegacyAccess,
-					}),
-					nav("Routing Rules", "nav.routingRules", "nav.routingRulesDescription", {
-						url: "/workspace/routing-rules",
-						icon: Network,
-						hasAccess: hasRoutingRulesAccess,
-					}),
-					nav("Complexity Router", "nav.complexityRouter", "nav.complexityRouterDescription", {
-						url: "/workspace/complexity-router",
-						icon: GitCompareArrows,
-						hasAccess: hasRoutingRulesAccess,
-					}),
-					nav("Circuit Breaker", "nav.circuitBreaker", "nav.circuitBreakerDescription", {
-						url: "/workspace/circuit-breaker",
-						icon: CircuitBoard,
-						hasAccess: hasCircuitBreakerAccess,
-					}),
-					nav("Pricing Overrides", "nav.pricingOverrides", "nav.pricingOverridesDescription", {
-						url: "/workspace/custom-pricing/overrides",
-						icon: SlidersHorizontal,
-						hasAccess: hasSettingsAccess,
-					}),
-					nav("Model Settings", "nav.modelSettings", "nav.modelSettingsDescription", {
-						url: "/workspace/custom-pricing",
-						icon: Settings,
-						hasAccess: hasSettingsAccess,
-					}),
-				],
-			}),
-			nav("MCP Gateway", "nav.mcpGateway", "nav.mcpGatewayDescription", {
-				icon: MCPIcon,
-				url: "/workspace/mcp-gateway",
-				hasAccess: hasMCPGatewayAccess || hasVirtualMCPsAccess,
-				subItems: [
-					nav("MCP Catalog", "nav.mcpCatalog", "nav.mcpCatalogDescription", {
-						url: "/workspace/mcp-registry",
-						icon: LayoutGrid,
-						hasAccess: hasMCPGatewayAccess,
-					}),
-					nav("MCP Library", "nav.mcpLibrary", "nav.mcpLibraryDescription", {
-						url: "/workspace/mcp-registry/library",
-						icon: Boxes,
-						hasAccess: hasMCPGatewayAccess,
-					}),
-					nav("Virtual MCPs", "nav.virtualMcps", "nav.virtualMcpsDescription", {
-						url: "/workspace/virtual-mcps",
-						icon: ToolCase,
-						hasAccess: hasVirtualMCPsAccess,
-						testId: "tool-groups", // keep the pre-rename E2E selector stable
-					}),
-					nav("Auth Sessions", "nav.authSessions", "nav.authSessionsDescription", {
-						url: "/workspace/mcp-sessions",
-						icon: KeyRound,
-						hasAccess: hasMCPGatewayAccess,
-					}),
-					nav("OAuth Grants", "nav.oauthGrants", "nav.oauthGrantsDescription", {
-						url: "/workspace/oauth-grants",
-						icon: ShieldCheck,
-						hasAccess: hasMCPGatewayAccess,
-					}),
-					nav("MCP Settings", "nav.mcpSettings", "nav.mcpSettingsDescription", {
-						url: "/workspace/mcp-settings",
-						icon: Settings,
-						hasAccess: hasMCPGatewayAccess,
-					}),
-				],
-			}),
-			nav("Plugins", "nav.plugins", "nav.pluginsDescription", {
-				url: "/workspace/plugins",
-				icon: Puzzle,
-				hasAccess: hasPluginsAccess,
-			}),
-			nav("Alerting", "nav.alerting", "nav.alertingDescription", {
-				url: "/workspace/alerting",
-				icon: Siren,
-				hasAccess: hasAlertingAccess,
-				subItems: [
-					nav("Channels", "nav.channels", "nav.channelsDescription", {
-						url: "/workspace/alerting/channels",
-						icon: Megaphone,
-						hasAccess: hasAlertingAccess,
-					}),
-					nav("Rules", "nav.rules", "nav.rulesDescription", {
-						url: "/workspace/alerting/rules",
-						icon: Gavel,
-						hasAccess: hasAlertingAccess,
-					}),
-					nav("History", "nav.history", "nav.historyDescription", {
-						url: "/workspace/alerting/history",
-						icon: History,
-						hasAccess: hasAlertingAccess,
-					}),
-				],
-			}),
-			nav("Governance", "nav.governance", "nav.governanceDescription", {
-				url: "/workspace/governance",
-				icon: Landmark,
-				hasAccess: hasAnyGovernanceAccess,
-				subItems: [
-					nav("Virtual Keys", "nav.virtualKeys", "nav.virtualKeysDescription", {
-						url: "/workspace/governance/virtual-keys",
-						icon: KeyRound,
-						hasAccess: hasVirtualKeysAccess,
-					}),
-					nav("Users", "nav.users", "nav.usersDescription", {
-						url: "/workspace/governance/users",
-						icon: Users,
-						hasAccess: hasUsersAccess,
-					}),
-					nav("Teams", "nav.teams", "nav.teamsDescription", {
-						url: "/workspace/governance/teams",
-						icon: Building,
-						hasAccess: hasTeamsAccess,
-					}),
-					nav("Business Units", "nav.businessUnits", "nav.businessUnitsDescription", {
-						url: "/workspace/governance/business-units",
-						icon: Building2,
-						hasAccess: hasBusinessUnitsAccess,
-					}),
-					nav("Customers", "nav.customers", "nav.customersDescription", {
-						url: "/workspace/governance/customers",
-						icon: WalletCards,
-						hasAccess: hasCustomersAccess,
-					}),
-					nav("User Provisioning", "nav.userProvisioning", "nav.userProvisioningDescription", {
-						url: "/workspace/scim",
-						icon: BookUser,
-						hasAccess: hasUserProvisioningAccess,
-					}),
-					nav("Roles & Permissions", "nav.rolesPermissions", "nav.rolesPermissionsDescription", {
-						url: "/workspace/governance/rbac",
-						icon: UserRoundCheck,
-						hasAccess: hasRbacAccess,
-					}),
-					nav("Access Profiles", "nav.accessProfiles", "nav.accessProfilesDescription", {
-						url: "/workspace/governance/access-profiles",
-						icon: ShieldCheck,
-						hasAccess: hasAccessProfilesAccess,
-					}),
-					nav("Projects", "nav.projects", "nav.projectsDescription", {
-						url: "/workspace/governance/projects",
-						icon: SquareKanban,
-						hasAccess: hasProjectsAccess,
-					}),
-					nav("Audit Logs", "nav.auditLogs", "nav.auditLogsDescription", {
-						url: "/workspace/audit-logs",
-						icon: ScrollText,
-						hasAccess: hasAuditLogsAccess,
-					}),
-				],
-			}),
-			nav("Guardrails", "nav.guardrails", "nav.guardrailsDescription", {
-				url: "/workspace/guardrails",
-				icon: Construction,
-				hasAccess: hasGuardrailsConfigAccess || hasGuardrailsProvidersAccess,
-				subItems: [
-					nav("Rules", "nav.guardrailRules", "nav.guardrailRulesDescription", {
-						url: "/workspace/guardrails/configuration",
-						icon: SearchCheck,
-						hasAccess: hasGuardrailsConfigAccess,
-					}),
-					nav("Providers", "nav.guardrailProviders", "nav.guardrailProvidersDescription", {
-						url: "/workspace/guardrails/providers",
-						icon: Boxes,
-						hasAccess: hasGuardrailsProvidersAccess,
-					}),
-				],
-			}),
-			nav("Webhooks", "nav.webhooks", "nav.webhooksDescription", {
-				url: "/workspace/webhooks",
-				icon: Webhook,
-				hasAccess: hasGovernanceLegacyAccess,
-			}),
-			nav("Edge Control", "nav.edgeControl", "nav.edgeControlDescription", {
-				icon: Hexagon,
-				url: "/workspace/edge-control",
-				hasAccess: hasAnyEdgeControlAccess,
-				subItems: [
-					nav("Devices", "nav.devices", "nav.devicesDescription", {
-						url: "/workspace/edge-control/devices",
-						icon: LaptopMinimalCheck,
-						hasAccess: hasDevicesAccess,
-					}),
-					nav("Approvals", "nav.approvals", "nav.approvalsDescription", {
-						url: "/workspace/edge-control/inventory",
-						icon: BadgeCheck,
-						hasAccess: hasInventoryAccess,
-					}),
-					nav("Edge Settings", "nav.edgeSettings", "nav.edgeSettingsDescription", {
-						url: "/workspace/edge-control/config",
-						icon: Settings,
-						hasAccess: hasEdgeConfigAccess,
-					}),
-				],
-			}),
-			nav("Cluster Config", "nav.clusterConfig", "nav.clusterConfigDescription", {
-				url: "/workspace/cluster",
-				icon: Network,
-				hasAccess: hasClusterConfigAccess,
-			}),
-			nav("Adaptive Routing", "nav.adaptiveRouting", "nav.adaptiveRoutingDescription", {
-				url: "/workspace/adaptive-routing",
-				icon: Shuffle,
-				hasAccess: isAdaptiveRoutingAllowed,
-				subItems: [
-					nav("Dashboard", "nav.adaptiveRoutingDashboard", "nav.adaptiveRoutingDashboardDescription", {
-						url: "/workspace/adaptive-routing",
-						icon: ChartColumnBig,
-						hasAccess: isAdaptiveRoutingAllowed,
-					}),
-					nav("Settings", "nav.adaptiveRoutingSettings", "nav.adaptiveRoutingSettingsDescription", {
-						url: "/workspace/adaptive-routing/settings",
-						icon: Settings,
-						hasAccess: isAdaptiveRoutingAllowed,
-					}),
-				],
-			}),
-			...(isDbConnected
-				? [
-						nav("Prompt Repository", "nav.promptRepository", "nav.promptRepositoryDescription", {
-							url: "/workspace/prompt-repo",
-							icon: FolderGit,
-							hasAccess: hasPromptRepositoryAccess,
-						}),
-						nav("Skills Repository", "nav.skillsRepository", "nav.skillsRepositoryDescription", {
-							url: "/workspace/skills-repo",
-							icon: BookOpenText,
-							hasAccess: hasSkillsRepositoryAccess,
-						}),
-					]
-				: []),
-			nav("Settings", "nav.settings", "nav.settingsDescription", {
-				url: "/workspace/config",
-				icon: Settings2Icon,
-				hasAccess: hasSettingsAccess || hasAuditLogsAccess || hasUserProvisioningAccess,
-				subItems: [
-					nav("Client Settings", "nav.clientSettings", "nav.clientSettingsDescription", {
-						url: "/workspace/config/client-settings",
-						icon: Settings,
-						hasAccess: hasSettingsAccess,
-					}),
-					nav("Compatibility", "nav.compatibility", "nav.compatibilityDescription", {
-						url: "/workspace/config/compatibility",
-						icon: Plug,
-						hasAccess: hasSettingsAccess,
-					}),
-					nav("Caching", "nav.caching", "nav.cachingDescription", {
-						url: "/workspace/config/caching",
-						icon: DatabaseZap,
-						hasAccess: hasSettingsAccess,
-					}),
-					nav("Security", "nav.security", "nav.securityDescription", {
-						url: "/workspace/config/security",
-						icon: ShieldCheck,
-						hasAccess: hasSettingsAccess,
-					}),
-					...(IS_ENTERPRISE
-						? [
-								nav("Proxy", "nav.proxy", "nav.proxyDescription", {
-									url: "/workspace/config/proxy",
-									icon: Globe,
-									hasAccess: hasSettingsAccess,
-								}),
-							]
-						: []),
-					nav("API Keys", "nav.apiKeys", "nav.apiKeysDescription", {
-						url: "/workspace/config/api-keys",
-						icon: KeyRound,
-						hasAccess: hasAPIKeyAccess,
-					}),
-					nav("Performance Tuning", "nav.performanceTuning", "nav.performanceTuningDescription", {
-						url: "/workspace/config/performance-tuning",
-						icon: TrendingUp,
-						hasAccess: hasSettingsAccess,
-					}),
-					nav("Feature Flags", "nav.featureFlags", "nav.featureFlagsDescription", {
-						url: "/workspace/config/feature-flags",
-						icon: Flag,
-						hasAccess: hasFeatureFlagsAccess,
-					}),
-					...(IS_ENTERPRISE
-						? [
-								nav("Branding", "nav.branding", "nav.brandingDescription", {
-									url: "/workspace/config/branding",
-									icon: Palette,
-									hasAccess: hasSettingsAccess,
-								}),
-								nav("License Info", "nav.licenseInfo", "nav.licenseInfoDescription", {
-									url: "/workspace/config/license",
-									icon: BadgeInfo,
-									hasAccess: hasSettingsAccess,
-								}),
-							]
-						: []),
-				],
-			}),
-		];
-	}, [
-		t,
-		hasLogsAccess,
-		hasAPIKeyAccess,
-		hasObservabilityAccess,
-		hasAlertingAccess,
-		hasDashboardAccess,
-		hasModelProvidersAccess,
-		hasMCPGatewayAccess,
-		hasVirtualMCPsAccess,
-		hasMCPLogsAccess,
-		hasPluginsAccess,
-		hasUsersAccess,
-		hasUserProvisioningAccess,
-		hasAuditLogsAccess,
-		hasCustomersAccess,
-		hasTeamsAccess,
-		hasBusinessUnitsAccess,
-		hasRbacAccess,
-		hasVirtualKeysAccess,
-		hasGovernanceLegacyAccess,
-		hasAnyGovernanceAccess,
-		hasRoutingRulesAccess,
-		hasGuardrailsProvidersAccess,
-		hasGuardrailsConfigAccess,
-		hasCircuitBreakerAccess,
-		hasClusterConfigAccess,
-		isAdaptiveRoutingAllowed,
-		hasSettingsAccess,
-		hasPromptRepositoryAccess,
-		hasSkillsRepositoryAccess,
-		hasAccessProfilesAccess,
-		hasProjectsAccess,
-		hasFeatureFlagsAccess,
-		hasDevicesAccess,
-		hasInventoryAccess,
-		hasEdgeConfigAccess,
-		hasAnyEdgeControlAccess,
-		isDbConnected,
-	]);
-
-	const accessibleItems: SidebarItem[] = useMemo(() => {
+	const accessibleItems: NavItem[] = useMemo(() => {
 		return items
 			.map((item) => {
 				const hadSubItems = !!item.subItems?.length;
@@ -994,29 +471,27 @@ export default function AppSidebar() {
 				if (item.hasAccess === false) return null;
 				return item;
 			})
-			.filter(Boolean) as SidebarItem[];
+			.filter(Boolean) as NavItem[];
 	}, [items]);
 
-	const filteredItems: SidebarItem[] = useMemo(() => {
+	const filteredItems: NavItem[] = useMemo(() => {
 		const query = searchQuery.trim().toLowerCase();
 		if (!query) return accessibleItems;
 
 		return accessibleItems
 			.map((item) => {
-				const parentMatches = [item.title, item.description, item.id].some((value) => value.toLowerCase().includes(query));
+				const parentMatches = item.title.toLowerCase().includes(query);
 				if (parentMatches) return item;
 
 				if (item.subItems) {
-					const matchingSubItems = item.subItems.filter((sub) =>
-						[sub.title, sub.description, sub.id].some((value) => value.toLowerCase().includes(query)),
-					);
+					const matchingSubItems = item.subItems.filter((sub) => sub.title.toLowerCase().includes(query));
 					if (matchingSubItems.length > 0) {
 						return { ...item, subItems: matchingSubItems };
 					}
 				}
 				return null;
 			})
-			.filter(Boolean) as SidebarItem[];
+			.filter(Boolean) as NavItem[];
 	}, [accessibleItems, searchQuery]);
 
 	const { data: version } = useGetVersionQuery();
@@ -1037,12 +512,13 @@ export default function AppSidebar() {
 	useEffect(() => {
 		const newExpandedItems = new Set<string>();
 		const isRouteMatch = (url: string) => {
-			if (url === "/workspace/custom-pricing" || url === "/workspace/adaptive-routing") return pathname === url;
+			if (url === "/workspace/custom-pricing" || url === "/workspace/adaptive-routing" || url === "/workspace/agent-gateway")
+				return pathname === url;
 			return pathname.startsWith(url);
 		};
 		items.forEach((item) => {
 			if (item.subItems?.some((subItem) => isRouteMatch(subItem.url))) {
-				newExpandedItems.add(itemId(item));
+				newExpandedItems.add(item.id ?? slug(item.title));
 			}
 		});
 		if (newExpandedItems.size > 0) {
@@ -1057,13 +533,11 @@ export default function AppSidebar() {
 		const toExpand = new Set<string>();
 		items.forEach((item) => {
 			if (!item.subItems?.length) return;
-			const parentMatches = [item.title, item.description, item.id].some((value) => value.toLowerCase().includes(query));
+			const parentMatches = item.title.toLowerCase().includes(query);
 			if (parentMatches) return;
-			const hasMatchingChild = item.subItems.some((sub) =>
-				[sub.title, sub.description, sub.id].some((value) => value.toLowerCase().includes(query)),
-			);
+			const hasMatchingChild = item.subItems.some((sub) => sub.title.toLowerCase().includes(query));
 			if (hasMatchingChild) {
-				toExpand.add(itemId(item));
+				toExpand.add(item.id ?? slug(item.title));
 			}
 		});
 		if (toExpand.size > 0) {
@@ -1074,18 +548,6 @@ export default function AppSidebar() {
 			});
 		}
 	}, [searchQuery, items]);
-
-	// Cmd+K to focus search input
-	useEffect(() => {
-		const handleKeyDown = (event: KeyboardEvent) => {
-			if (event.key === "k" && (event.metaKey || event.ctrlKey)) {
-				event.preventDefault();
-				searchInputRef.current?.focus();
-			}
-		};
-		window.addEventListener("keydown", handleKeyDown);
-		return () => window.removeEventListener("keydown", handleKeyDown);
-	}, []);
 
 	// Flat list of navigable items for keyboard navigation
 	const navigableItems = useMemo(() => {
@@ -1103,12 +565,12 @@ export default function AppSidebar() {
 			const hasSubItems = item.subItems && item.subItems.length > 0;
 			if (hasSubItems) {
 				// When search is active or parent is expanded, include visible subItems
-				if (searchQuery.trim() || expandedItems.has(itemId(item))) {
+				if (searchQuery.trim() || expandedItems.has(item.id)) {
 					for (const sub of item.subItems!) {
 						if (sub.hasAccess === false) continue;
 						result.push({
 							title: sub.title,
-							url: getSidebarItemHref(sub),
+							url: getNavItemHref(sub),
 							queryParam: sub.queryParam,
 						});
 					}
@@ -1137,7 +599,7 @@ export default function AppSidebar() {
 				if (target) {
 					const url = target.url;
 					if (target.isExternal || e.metaKey || e.ctrlKey) {
-						window.open(url, "_blank", "noopener,noreferrer");
+						window.open(withBasePath(url), "_blank", "noopener,noreferrer");
 					} else {
 						navigate(url);
 					}
@@ -1175,7 +637,7 @@ export default function AppSidebar() {
 		});
 	};
 
-	const configExceptions = ["/workspace/config/logging"];
+	const configExceptions = ["/workspace/config/logging", "/workspace/config/skills"];
 
 	const isActiveRoute = (url: string) => {
 		if (url === "/" && pathname === "/") return true;
@@ -1198,19 +660,53 @@ export default function AppSidebar() {
 	const { isConnected: isWebSocketConnected } = useWebSocket();
 
 	// New release image - based on theme
-	const newReleaseImage = mounted && resolvedTheme === "dark" ? "/images/new-release-image-dark.webp" : "/images/new-release-image.webp";
+	const newReleaseImage =
+		mounted && resolvedTheme === "dark"
+			? withBasePath("/images/new-release-image-dark.webp")
+			: withBasePath("/images/new-release-image.webp");
 
 	// Memoize promo cards array to prevent duplicates and unnecessary re-renders
 	const promoCards = useMemo(() => {
 		const cards = [];
+		// OSS setup lock card - non-dismissible, shown first: until an admin account
+		// exists, management APIs run on the operator's setup token.
+		if (setupRequired) {
+			cards.push({
+				id: "setup-required",
+				title: t("promo.setupRequired.title"),
+				description: (
+					<div className="flex h-full flex-col gap-2 text-xs text-amber-700 dark:text-amber-300/80" data-testid="setup-required-banner">
+						<p>
+							<Trans t={t} i18nKey="promo.setupRequired.body" components={{ code: <code className="font-semibold" /> }} />
+						</p>
+						<div className="mt-auto flex items-center gap-3 pb-1">
+							<Link to="/workspace/config/security" className="text-primary font-medium underline" data-testid="setup-required-banner-link">
+								{t("promo.setupRequired.createAdmin")}
+							</Link>
+							<a
+								href="https://docs.getbifrost.ai/quickstart/gateway/setting-up-auth"
+								target="_blank"
+								rel="noopener noreferrer"
+								className="text-primary font-medium underline"
+								data-testid="setup-required-banner-docs-link"
+							>
+								{t("promo.setupRequired.docs")}
+							</a>
+						</div>
+					</div>
+				),
+				dismissible: false,
+				variant: "warning" as const,
+			});
+		}
 		// Restart required card - non-dismissible, shown first
 		if (coreConfig?.restart_required?.required) {
 			cards.push({
 				id: "restart-required",
-				title: t("promo.restartRequired"),
+				title: t("promo.restartRequired.title"),
 				description: (
 					<div className="text-xs text-amber-700 dark:text-amber-300/80">
-						{coreConfig.restart_required.reason || t("promo.restartRequiredFallback")}
+						{coreConfig.restart_required.reason || t("promo.restartRequired.defaultReason")}
 					</div>
 				),
 				dismissible: false,
@@ -1223,17 +719,17 @@ export default function AppSidebar() {
 			const remainingSteps = onboardingSteps.length - onboardingDoneCount;
 			cards.push({
 				id: "onboarding-incomplete",
-				title: t("promo.setupIncomplete"),
+				title: t("promo.onboarding.title"),
 				description: (
 					<div className="flex h-full flex-col gap-2 text-xs text-amber-700 dark:text-amber-300/80">
-						<p>{t(remainingSteps === 1 ? "promo.setupStepsLeft_one" : "promo.setupStepsLeft_other", { count: remainingSteps })}</p>
+						<p>{t("promo.onboarding.stepsLeft", { count: remainingSteps })}</p>
 						<button
 							type="button"
 							onClick={handleResumeOnboarding}
 							data-testid="onboarding-resume-btn"
 							className="text-primary mt-auto self-start pb-1 font-medium underline"
 						>
-							{t("promo.resumeSetup")}
+							{t("promo.onboarding.resume")}
 						</button>
 					</div>
 				),
@@ -1244,17 +740,17 @@ export default function AppSidebar() {
 		if (showNewReleaseBanner && latestRelease) {
 			cards.push({
 				id: "new-release",
-				title: t("promo.releaseAvailable", { name: latestRelease.name }),
+				title: t("promo.newRelease.available", { name: latestRelease.name }),
 				description: (
 					<div className="flex h-full flex-col gap-2">
-						<img src={newReleaseImage} alt="Bifrost" className="h-[95px] rounded-md object-cover" />
+						<img src={newReleaseImage} alt={t("promo.newRelease.imageAlt")} className="h-[95px] rounded-md object-cover" />
 						<a
 							href={`https://docs.getbifrost.ai/changelogs/${latestRelease.name}`}
 							target="_blank"
 							rel="noopener noreferrer"
 							className="text-primary mt-auto pb-1 font-medium underline"
 						>
-							{t("promo.viewReleaseNotes")}
+							{t("promo.newRelease.viewNotes")}
 						</a>
 					</div>
 				),
@@ -1265,20 +761,20 @@ export default function AppSidebar() {
 		if (!IS_ENTERPRISE && mounted && !isProductionSetupDismissed) {
 			cards.push({
 				id: "production-setup",
-				title: t("promo.productionSetupTitle"),
+				title: t("promo.productionSetup.title"),
 				description: (
 					<>
-						{t("promo.productionSetupLead")}
+						{t("promo.productionSetup.body")}
 						<br />
 						<br />
-						{t("promo.productionSetupCta")}{" "}
+						{t("promo.productionSetup.bookPrefix")}{" "}
 						<a
 							href="https://calendly.com/maximai/bifrost-demo?utm_source=bfd_sdbr"
 							target="_blank"
 							className="text-primary font-medium underline"
 							rel="noopener noreferrer"
 						>
-							{t("common.here")}
+							{t("promo.productionSetup.here")}
 						</a>
 						.
 					</>
@@ -1288,6 +784,7 @@ export default function AppSidebar() {
 		}
 		return cards;
 	}, [
+		setupRequired,
 		coreConfig?.restart_required,
 		showNewReleaseBanner,
 		latestRelease,
@@ -1354,12 +851,14 @@ export default function AppSidebar() {
 					</button>
 				</div>
 				{/* Collapsed state: vertical layout */}
-				<div
+				<button
+					type="button"
 					className="hidden w-full cursor-pointer flex-col items-center gap-2 py-1 group-data-[collapsible=icon]:flex"
+					aria-label={t("sidebar.expand")}
 					onClick={toggleSidebar}
 				>
-					<img className="size-[22px] object-contain" src={iconSrc} alt={logoAlt} width={22} height={22} />
-				</div>
+					<img className="size-[22px] object-contain" src={iconSrc} alt="" width={22} height={22} />
+				</button>
 			</SidebarHeader>
 			{envLabel && (
 				<div className="mx-2 -mt-1 mb-2">
@@ -1384,20 +883,16 @@ export default function AppSidebar() {
 					<input
 						ref={searchInputRef}
 						type="text"
-						aria-label={t("sidebar.search")}
-						placeholder={t("sidebar.searchPlaceholder")}
+						aria-label={t("search.ariaLabel")}
+						placeholder={t("search.placeholder")}
 						value={searchQuery}
 						onChange={(e) => {
 							setSearchQuery(e.target.value);
 							setFocusedIndex(-1);
 						}}
 						onKeyDown={handleSearchKeyDown}
-						className="border-input text-foreground placeholder:text-shadow-muted-foreground focus:ring-ring h-8 w-full rounded-sm border bg-transparent pr-14 pl-8 text-sm outline-none focus:bg-transparent"
+						className="border-input text-foreground placeholder:text-shadow-muted-foreground focus:ring-ring h-8 w-full rounded-sm border bg-transparent pr-2 pl-8 text-sm outline-none focus:bg-transparent"
 					/>
-					<kbd className="text-muted-foreground pointer-events-none absolute top-1/2 right-2 flex -translate-y-1/2 gap-0.5 text-[10px]">
-						<span className="border-border bg-muted rounded-sm px-1 font-mono shadow-sm">⌘</span>
-						<span className="border-border bg-muted rounded-sm px-1 font-mono shadow-sm">K</span>
-					</kbd>
 				</div>
 			</div>
 			<SidebarContent className="overflow-hidden">
@@ -1409,14 +904,14 @@ export default function AppSidebar() {
 
 								const highlightedUrl = focusedIndex >= 0 ? navigableItems[focusedIndex]?.url : undefined;
 								return (
-									<SidebarItemView
-										key={itemId(item)}
+									<NavItemView
+										key={item.id}
 										item={item}
 										isActive={isActive}
 										isExternal={item.isExternal ?? false}
 										isWebSocketConnected={isWebSocketConnected}
-										isExpanded={expandedItems.has(itemId(item))}
-										onToggle={() => toggleItem(itemId(item))}
+										isExpanded={expandedItems.has(item.id)}
+										onToggle={() => toggleItem(item.id)}
 										pathname={pathname}
 										search={search}
 										isSidebarCollapsed={!isMobile && sidebarState === "collapsed"}
