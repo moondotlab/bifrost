@@ -59,6 +59,10 @@ type Store struct {
 	// return defensive copies of any slice/map they expose.
 	mu                     sync.RWMutex
 	pricingData            map[string]configstoreTables.TableModelPricing // model|provider|mode → row
+	modelModes             map[string][]string                            // normalized model/provider → preferred-first modes
+	familyModes            map[string][]string                            // normalized base model/provider → preferred-first modes
+	overrideMetadataKeys   map[string]string                              // synthetic parameter row → metadata index key
+	parameterMetadata      map[string]parameterModelMetadata              // normalized model/provider → parameter-sheet capabilities
 	baseModelIndex         map[string]string                              // model → canonical base name
 	supportedResponseTypes map[string][]string                            // model → [chat_completion, responses, …]
 	supportedParams        map[string][]string                            // model → [temperature, top_p, …]
@@ -385,13 +389,8 @@ func (s *Store) IsTextCompletionSupported(model string, provider schemas.ModelPr
 // --- Private capability helpers (caller holds mu) ---
 
 func (s *Store) capabilityEntryForExactUnsafe(model string, provider schemas.ModelProvider) *Entry {
-	preferredModes := []schemas.RequestType{
-		schemas.ChatCompletionRequest,
-		schemas.ResponsesRequest,
-		schemas.TextCompletionRequest,
-	}
-	for _, mode := range preferredModes {
-		key := makeKeyNormalized(model, string(provider), normalizeRequestType(mode))
+	for _, mode := range preferredCapabilityModes {
+		key := makeKeyNormalized(model, string(provider), mode)
 		if pricing, ok := s.pricingData[key]; ok {
 			return convertTablePricingToEntry(&pricing)
 		}
@@ -428,12 +427,7 @@ func (s *Store) selectCapabilityEntryFromKeysUnsafe(matchingKeys []string) *Entr
 	if len(matchingKeys) == 0 {
 		return nil
 	}
-	preferredModes := []string{
-		normalizeRequestType(schemas.ChatCompletionRequest),
-		normalizeRequestType(schemas.ResponsesRequest),
-		normalizeRequestType(schemas.TextCompletionRequest),
-	}
-	for _, mode := range preferredModes {
+	for _, mode := range preferredCapabilityModes {
 		var modeMatches []string
 		for _, key := range matchingKeys {
 			parts := strings.SplitN(key, "|", 3)
@@ -533,7 +527,8 @@ func pricingRowBeats(row, current configstoreTables.TableModelPricing) bool {
 // --- Internal: rebuild the datasheet view from current pricingData ---
 
 // rebuildDatasheetViewUnsafe regenerates baseModelIndex, datasheetByProvider,
-// and deprecatedByProvider from rows. Caller MUST hold s.mu write-lock.
+// and deprecatedByProvider from rows, and rebuilds the effective mode indexes.
+// Caller MUST hold s.mu write-lock.
 func (s *Store) rebuildDatasheetViewUnsafe(rows []configstoreTables.TableModelPricing) {
 	s.baseModelIndex = make(map[string]string)
 	providerModels := make(map[schemas.ModelProvider]map[string]struct{})
@@ -577,6 +572,7 @@ func (s *Store) rebuildDatasheetViewUnsafe(rows []configstoreTables.TableModelPr
 		s.deprecatedByProvider[provider] = models
 	}
 
+	s.rebuildModelModesUnsafe()
 	s.writeGen.Add(1)
 }
 

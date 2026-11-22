@@ -58,8 +58,17 @@ Model:
       type: string
     owned_by:
       type: string
+    mode:
+      type: string
+      description: 'Preferred catalog mode (chat, then responses, then completion, then the first remaining mode alphabetically) or the provider-reported mode. A model may support multiple modes.'
+    supported_endpoints:
+      type: array
+      description: 'Gateway route identifiers aggregated from catalog capabilities and provider-reported metadata. A listed route does not guarantee that every configured vendor implements that compatibility surface.'
+      items:
+        type: string
     supported_methods:
       type: array
+      description: 'Catalog request-type identifiers and provider-reported method names. Availability on compatibility surfaces varies by provider.'
       items:
         type: string
 

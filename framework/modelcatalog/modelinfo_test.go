@@ -1,6 +1,7 @@
 package modelcatalog
 
 import (
+	"encoding/json"
 	"math"
 	"os"
 	"path/filepath"
@@ -9,9 +10,11 @@ import (
 
 	bifrost "github.com/maximhq/bifrost/core"
 	"github.com/maximhq/bifrost/core/schemas"
+	"github.com/maximhq/bifrost/framework/configstore/tables"
 	"github.com/maximhq/bifrost/framework/modelcatalog/datasheet"
 	"github.com/maximhq/bifrost/framework/modelcatalog/keyconfig"
 	"github.com/maximhq/bifrost/framework/modelcatalog/live"
+	"github.com/stretchr/testify/require"
 )
 
 func modelInfoCatalog(t testing.TB) *ModelCatalog {
@@ -495,4 +498,125 @@ func BenchmarkEnrichListModelsResponse(b *testing.B) {
 			mc.EnrichListModelsResponse(resp)
 		}
 	})
+}
+
+func TestModelCapabilityMetadata(t *testing.T) {
+	params := filepath.Join(t.TempDir(), "params.json")
+	ds := datasheet.New(nil, bifrost.NewNoOpLogger(), datasheet.Config{ModelParametersURL: "file://" + params})
+	ds.SetPricingRowsForTest([]tables.TableModelPricing{
+		{Model: "multi", Provider: "openai", Mode: "embedding"},
+		{Model: "multi", Provider: "openai", Mode: "image_generation"},
+		{Model: "multi", Provider: "openai", Mode: "completion"},
+		{Model: "multi", Provider: "openai", Mode: "responses"},
+		{Model: "multi", Provider: "openai", Mode: "chat"},
+		{Model: "multi", Provider: "anthropic", Mode: "decisions"},
+		{Model: "unknown-mode", Provider: "openai", Mode: "z_custom"},
+		{Model: "unknown-mode", Provider: "openai", Mode: "a_custom"},
+	})
+	require.NoError(t, os.WriteFile(params, []byte(`{
+		"multi": {"provider":"anthropic", "supported_endpoints": ["/v1/ocr"]},
+		"openai/params-only": {"mode":"live"},
+		"openai/multi": {"mode":"rerank", "supported_endpoints": ["/v1/chat/completions", "/v1/images/variations", "/vendor/catalog"]}
+	}`), 0o600))
+	require.NoError(t, ds.LoadModelParamsFromURLIntoMemory(t.Context()))
+
+	keys := keyconfig.New(nil)
+	keys.Replace(map[schemas.ModelProvider][]schemas.Key{
+		schemas.OpenAI: {{ID: "key", Enabled: schemas.Ptr(true), Models: schemas.WhiteList{"*"}, Aliases: schemas.KeyAliases{
+			"named-alias": {ModelID: "wire-deployment", ModelName: schemas.Ptr("openai/multi")},
+			"wire-alias":  {ModelID: "multi"},
+		}}},
+	})
+	mc := &ModelCatalog{datasheet: ds, keyconf: keys}
+
+	wantEndpoints := []string{
+		"/v1/chat/completions", "/v1/responses", "/v1/completions",
+		"/v1/embeddings", "/v1/images/generations", "/v1/rerank", "/v1/images/variations", "/vendor/catalog",
+	}
+	wantMethods := []string{
+		string(schemas.ChatCompletionRequest), string(schemas.ResponsesRequest), string(schemas.TextCompletionRequest),
+		string(schemas.EmbeddingRequest), string(schemas.ImageGenerationRequest), string(schemas.RerankRequest), string(schemas.ImageVariationRequest),
+	}
+	for _, model := range []schemas.Model{
+		{ID: "openai/multi"},
+		{ID: "openai/list-alias", Alias: schemas.Ptr("openai/multi")},
+		{ID: "openai/named-alias"},
+		{ID: "openai/wire-alias"},
+		{ID: "openai/multi-2024-01-01"},
+	} {
+		t.Run(model.ID, func(t *testing.T) {
+			list := &schemas.BifrostListModelsResponse{Data: []schemas.Model{model}}
+			retrieve := &schemas.BifrostModelRetrieveResponse{Model: model}
+			mc.EnrichListModelsResponse(list)
+			mc.EnrichModelRetrieveResponse(retrieve)
+			got := list.Data[0]
+			require.Equal(t, got, retrieve.Model)
+			require.Equal(t, "chat", got.Mode)
+			require.Equal(t, wantEndpoints, got.SupportedEndpoints)
+			require.Equal(t, wantMethods, got.SupportedMethods)
+			require.Nil(t, got.Pricing)
+			if model.Alias == nil {
+				_, name := schemas.ParseModelString(model.ID, "")
+				info := mc.GetModelInfo(schemas.OpenAI, name)
+				require.NotNil(t, info)
+				require.Equal(t, got.Mode, info.Mode)
+				require.Equal(t, got.SupportedEndpoints, info.SupportedEndpoints)
+				require.Equal(t, got.SupportedMethods, info.SupportedMethods)
+			}
+		})
+	}
+
+	list := &schemas.BifrostListModelsResponse{Data: []schemas.Model{
+		{ID: "anthropic/multi"},
+		{ID: "openai/unknown-mode"},
+		{ID: "openai/no-data"},
+		{ID: "openai/multi", Mode: "provider-mode",
+			SupportedEndpoints: []string{"/provider/endpoint", "/v1/chat/completions"},
+			SupportedMethods:   []string{"provider-method", string(schemas.ChatCompletionRequest)}},
+	}}
+	mc.EnrichListModelsResponse(list)
+	require.Equal(t, "decisions", list.Data[0].Mode)
+	require.Equal(t, []string{"/v1/decisions", "/v1/ocr"}, list.Data[0].SupportedEndpoints)
+	require.Equal(t, []string{string(schemas.DecisionRequest), string(schemas.OCRRequest)}, list.Data[0].SupportedMethods)
+	require.Equal(t, "a_custom", list.Data[1].Mode)
+	unknownJSON, err := json.Marshal(list.Data[1])
+	require.NoError(t, err)
+	require.JSONEq(t, `{"id":"openai/unknown-mode","mode":"a_custom"}`, string(unknownJSON))
+	emptyJSON, err := json.Marshal(list.Data[2])
+	require.NoError(t, err)
+	require.JSONEq(t, `{"id":"openai/no-data"}`, string(emptyJSON))
+	require.Equal(t, "provider-mode", list.Data[3].Mode)
+	require.Equal(t, append([]string{"/provider/endpoint"}, wantEndpoints...), list.Data[3].SupportedEndpoints)
+	require.Equal(t, append([]string{"provider-method"}, wantMethods...), list.Data[3].SupportedMethods)
+
+	info := mc.GetModelInfo(schemas.OpenAI, "params-only")
+	require.NotNil(t, info)
+	require.Equal(t, "live", info.Mode)
+	require.Equal(t, []string{"/v1/live/sessions"}, info.SupportedEndpoints)
+	require.Equal(t, []string{string(schemas.LiveRequest)}, info.SupportedMethods)
+	require.Nil(t, mc.GetModelInfo(schemas.Anthropic, "params-only"))
+}
+
+func TestModelCapabilityMappingCoversPricingModes(t *testing.T) {
+	ds := datasheet.NewTestStore(nil)
+	mc := &ModelCatalog{datasheet: ds}
+	wantEndpoints := map[string]string{
+		"chat": "/v1/chat/completions", "responses": "/v1/responses", "completion": "/v1/completions",
+		"embedding": "/v1/embeddings", "rerank": "/v1/rerank", "decisions": "/v1/decisions",
+		"audio_speech": "/v1/audio/speech", "audio_transcription": "/v1/audio/transcriptions",
+		"image_generation": "/v1/images/generations", "image_edit": "/v1/images/edits",
+		"video_generation": "/v1/videos", "ocr": "/v1/ocr",
+		"container_create": "/v1/containers", "live": "/v1/live/sessions",
+	}
+	for _, mode := range datasheet.PricingLookupModes() {
+		t.Run(mode, func(t *testing.T) {
+			ds.SetPricingRowsForTest([]tables.TableModelPricing{{Model: "test", Provider: "openai", Mode: mode}})
+			info := mc.GetModelInfo(schemas.OpenAI, "test")
+			require.NotNil(t, info)
+			require.Equal(t, mode, info.Mode)
+			require.Equal(t, []string{wantEndpoints[mode]}, info.SupportedEndpoints)
+			require.Len(t, info.SupportedMethods, 1)
+			require.NotNil(t, ds.Get("test", schemas.OpenAI, schemas.RequestType(info.SupportedMethods[0])))
+		})
+	}
 }

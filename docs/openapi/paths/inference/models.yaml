@@ -6,6 +6,8 @@ models:
       Lists available models. If provider is not specified, lists all models from all configured providers.
 
       If a virtual key is provided, Bifrost only lists (and only queries) providers allowed by that virtual key.
+
+      Model list and retrieve responses include optional capability metadata when available. Catalog endpoint identifiers use gateway route templates without the deployment base path. Clients using a deployment base path must prepend it when calling these routes.
     tags:
     - Models
     parameters:

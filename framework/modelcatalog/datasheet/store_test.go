@@ -76,7 +76,7 @@ func TestPricingLookupsNormalizeZhipuOntoZai(t *testing.T) {
 	}
 
 	s.mu.Lock()
-	s.rebuildDatasheetViewUnsafe()
+	s.rebuildDatasheetViewUnsafe(slices.Collect(maps.Values(s.pricingData)))
 	s.mu.Unlock()
 	if got := s.DatasheetModelsForProvider(provider); !slices.Equal(got, []string{model}) {
 		t.Fatalf("DatasheetModelsForProvider() = %v, want [%s]", got, model)
@@ -109,7 +109,7 @@ func TestPricingLookupsNormalizeVolcanoOntoVolcengine(t *testing.T) {
 	}
 
 	s.mu.Lock()
-	s.rebuildDatasheetViewUnsafe()
+	s.rebuildDatasheetViewUnsafe(slices.Collect(maps.Values(s.pricingData)))
 	s.mu.Unlock()
 	if got := s.DatasheetModelsForProvider(provider); !slices.Equal(got, []string{model}) {
 		t.Fatalf("DatasheetModelsForProvider() = %v, want [%s]", got, model)
@@ -249,5 +249,40 @@ func TestSetPricingRowsKeepsEverySpellingInDatasheetView(t *testing.T) {
 	}
 	if got := s.BaseModelName("DeepSeek-V4-Pro"); got != "deepseek-v4-pro" {
 		t.Fatalf("BaseModelName() = %q, want the indexed base model", got)
+	}
+}
+
+func TestModelMetadataRefreshAndProviderIsolation(t *testing.T) {
+	s := NewTestStore(nil)
+	s.SetPricingRowsForTest([]configstoreTables.TableModelPricing{
+		{Model: "model", Provider: "bedrock", Mode: "chat"},
+		{Model: "model", Provider: "bedrock_mantle", Mode: "responses"},
+		{Model: "bedrock/model", Provider: "bedrock", Mode: "live"},
+		{Model: "versioned", Provider: "bedrock", Mode: "embedding", BaseModel: "family"},
+		{Model: "versioned", Provider: "bedrock", Mode: "chat", BaseModel: "family"},
+	})
+	for _, test := range []struct {
+		name     string
+		provider schemas.ModelProvider
+		want     []string
+	}{
+		{"model", schemas.Bedrock, []string{"chat", "live"}},
+		{"model", schemas.BedrockMantle, []string{"responses"}},
+		{"family", schemas.Bedrock, []string{"chat", "embedding"}},
+	} {
+		modes, _ := s.ModelMetadata(test.name, test.provider)
+		if !slices.Equal(test.want, modes) {
+			t.Fatalf("ModelMetadata(%s, %s) = %v, want %v", test.name, test.provider, modes, test.want)
+		}
+		modes[0] = "mutated"
+		again, _ := s.ModelMetadata(test.name, test.provider)
+		if !slices.Equal(test.want, again) {
+			t.Fatalf("ModelMetadata(%s, %s) aliased the index: %v", test.name, test.provider, again)
+		}
+	}
+	s.SetPricingRowsForTest(nil)
+	modes, _ := s.ModelMetadata("model", schemas.Bedrock)
+	if len(modes) != 0 {
+		t.Fatalf("ModelMetadata returned stale modes after reload: %v", modes)
 	}
 }

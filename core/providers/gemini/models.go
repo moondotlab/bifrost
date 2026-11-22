@@ -102,7 +102,7 @@ func ToGeminiListModelsResponse(resp *schemas.BifrostListModelsResponse) *Gemini
 	for _, model := range resp.Data {
 		geminiModel := GeminiModel{
 			Name:                       toGeminiModelResourceName(model.ID),
-			SupportedGenerationMethods: model.SupportedMethods,
+			SupportedGenerationMethods: model.ProviderSupportedMethods(),
 		}
 		if model.Name != nil {
 			geminiModel.DisplayName = *model.Name

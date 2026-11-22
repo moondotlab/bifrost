@@ -29,12 +29,12 @@ func (mc *ModelCatalog) GetModelInfo(provider schemas.ModelProvider, model strin
 	if entry == nil {
 		entry = mc.datasheet.GetCapabilityEntry(model, provider)
 	}
-	if entry == nil {
-		return nil
-	}
-
 	info := &schemas.Model{ID: model}
 	ApplyModelInfo(info, entry)
+	mc.enrichModelCapabilities(info, model, provider)
+	if entry == nil && info.Mode == "" && len(info.SupportedEndpoints) == 0 {
+		return nil
+	}
 
 	if params := mc.datasheet.GetSupportedParameters(model); len(params) > 0 {
 		info.SupportedParameters = params
@@ -71,6 +71,7 @@ func (mc *ModelCatalog) enrichModel(model *schemas.Model) {
 		entry = mc.GetPricingEntryForModel(*model.Alias, provider)
 	}
 	ApplyModelInfo(model, entry)
+	mc.enrichModelCapabilities(model, modelName, provider)
 }
 
 // ApplyModelInfo merges catalog metadata from entry into model, filling only
@@ -142,7 +143,7 @@ func ApplyModelInfo(model *schemas.Model, entry *PricingEntry) {
 	if model.Pricing != nil {
 		return
 	}
-	pricing := &schemas.Pricing{}
+	pricing := schemas.Pricing{}
 	if entry.InputCostPerToken != nil {
 		pricing.Prompt = new(formatCost(*entry.InputCostPerToken))
 	}
@@ -164,7 +165,9 @@ func ApplyModelInfo(model *schemas.Model, entry *PricingEntry) {
 	if entry.CostPerRequest != nil {
 		pricing.Request = new(formatCost(*entry.CostPerRequest))
 	}
-	model.Pricing = pricing
+	if pricing != (schemas.Pricing{}) {
+		model.Pricing = new(pricing)
+	}
 }
 
 // CalculateRequestCost returns the dollar cost of resp, resolving governance

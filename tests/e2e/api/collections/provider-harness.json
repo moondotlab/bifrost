@@ -204436,7 +204436,7 @@
       "description": "Pins the OpenAI-spec Retrieve model endpoint (GET /v1/models/{model}) requested by a customer integration that validates a model before use. Positive rows cover every provider with a native retrieve that the harness profile configures (OpenAI, Groq, xAI, Mistral, Anthropic, Gemini, Cohere; Ollama is not in the profile) on the native route, where the path carries provider/model and the body is served by the model_retrieve request type. The /openai drop-in row asserts the OpenAI Model object shape (object, id, created, owned_by). Anthropic resolves an alias to its dated id. Negative rows pin that an unknown model surfaces the provider 404 rather than an unsupported error, and that a provider without a retrieve endpoint (DeepSeek) returns 400 unsupported_operation. Encoded rows send the id the way OpenAI SDKs do (provider%2Fmodel), which the route must decode once before parsing, while an encoded ../ is still refused.",
       "item": [
         {
-          "name": "Retrieve model: openai/gpt-4o-mini (native /v1)",
+          "name": "Retrieve model: openai/gpt-4o-mini (native /v1) - capability metadata",
           "event": [
             {
               "listen": "test",
@@ -204451,6 +204451,9 @@
                   "  pm.expect(j.id, body).to.equal('openai/gpt-4o-mini');",
                   "  pm.expect(j.created, 'created must be a unix timestamp: ' + body).to.be.a('number');",
                   "  pm.expect(j.owned_by, body).to.be.a('string').and.not.empty;",
+                  "  pm.expect(j.mode, JSON.stringify(j)).to.equal('chat');",
+                  "  pm.expect(j.supported_endpoints, JSON.stringify(j)).to.include('/v1/chat/completions');",
+                  "  pm.expect(j.supported_methods, JSON.stringify(j)).to.include('chat_completion');",
                   "});"
                 ]
               }
@@ -283928,7 +283931,59 @@
       "description": "GET /anthropic/v1/models and GET /openai/v1/models (plus /openai/v1/models/{model}) used to hand the provider answer straight to the SDK converter, so max_input_tokens / max_tokens / context_window were never backfilled from the pricing catalog, while GET /v1/models on the same instance reported them (#7319). GenericRouter.handleRequest now applies the same modelcatalog enrichment the native route does. Each case pins one drop-in route: the catalog limit must be present and positive for a model the catalog knows. 270.1 is smoke coverage only: Anthropic reports both limits itself, so it passes before the fix. 270.4 is the red-before-green pin for the /anthropic route: x-bf-model-provider: openai lists OpenAI models in the Anthropic shape, OpenAI reports no limits, so max_input_tokens and max_tokens can only come from the catalog.",
       "item": [
         {
-          "name": "270.1 anthropic/claude-haiku-4-5 via /anthropic/v1/models carries max_input_tokens and max_tokens (catalog enrichment) - #7319",
+          "name": "openai/gpt-4o-mini native list capability metadata",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('native model listing succeeds', function () {",
+                  "  pm.expect(pm.response.code, pm.response.text()).to.equal(200);",
+                  "});",
+                  "var entry = (pm.response.json().data || []).find(function (model) { return model.id === 'openai/gpt-4o-mini'; });",
+                  "pm.test('native model list includes catalog capability metadata', function () {",
+                  "  pm.expect(entry, pm.response.text()).to.be.an('object');",
+                  "  pm.expect(entry.mode, JSON.stringify(entry)).to.equal('chat');",
+                  "  pm.expect(entry.supported_endpoints, JSON.stringify(entry)).to.include('/v1/chat/completions');",
+                  "  pm.expect(entry.supported_methods, JSON.stringify(entry)).to.include('chat_completion');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{openaiKey}}"
+              },
+              {
+                "key": "x-bf-model-provider",
+                "value": "openai"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/models?provider=openai",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "models"
+              ],
+              "query": [
+                {
+                  "key": "provider",
+                  "value": "openai"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "270.1 anthropic/claude-haiku-4-5 via /anthropic/v1/models carries max_input_tokens and max_tokens (catalog enrichment) - #7319 - capability metadata",
           "event": [
             {
               "listen": "test",
@@ -283943,6 +283998,10 @@
                   "var entry = (body.data || []).filter(function (m) { return typeof m.id === 'string' && m.id.indexOf('claude-haiku-4-5') === 0; })[0];",
                   "pm.test('the catalog limits reach the drop-in route (#7319)', function () {",
                   "  pm.expect(entry, 'model not listed: ' + pm.response.text()).to.be.an('object');",
+                  "  pm.expect(entry.type, JSON.stringify(entry)).to.equal('model');",
+                  "  pm.expect(entry.mode, JSON.stringify(entry)).to.equal('chat');",
+                  "  pm.expect(entry.supported_endpoints, JSON.stringify(entry)).to.include('/v1/chat/completions');",
+                  "  pm.expect(entry.supported_methods, JSON.stringify(entry)).to.include('chat_completion');",
                   "  pm.expect(entry['max_input_tokens'], 'max_input_tokens missing on ' + JSON.stringify(entry)).to.be.a('number').above(0);",
                   "  pm.expect(entry['max_tokens'], 'max_tokens missing on ' + JSON.stringify(entry)).to.be.a('number').above(0);",
                   "});"
@@ -283980,7 +284039,7 @@
           }
         },
         {
-          "name": "270.2 openai/gpt-4o-mini via /openai/v1/models carries context_window (catalog enrichment) - #7319",
+          "name": "270.2 openai/gpt-4o-mini via /openai/v1/models carries context_window (catalog enrichment) - #7319 - capability metadata",
           "event": [
             {
               "listen": "test",
@@ -283995,6 +284054,10 @@
                   "var entry = (body.data || []).filter(function (m) { return m.id === 'openai/gpt-4o-mini'; })[0];",
                   "pm.test('the catalog limits reach the drop-in route (#7319)', function () {",
                   "  pm.expect(entry, 'model not listed: ' + pm.response.text()).to.be.an('object');",
+                  "  pm.expect(entry.object, JSON.stringify(entry)).to.equal('model');",
+                  "  pm.expect(entry.mode, JSON.stringify(entry)).to.equal('chat');",
+                  "  pm.expect(entry.supported_endpoints, JSON.stringify(entry)).to.include('/v1/chat/completions');",
+                  "  pm.expect(entry.supported_methods, JSON.stringify(entry)).to.include('chat_completion');",
                   "  pm.expect(entry['context_window'], 'context_window missing on ' + JSON.stringify(entry)).to.be.a('number').above(0);",
                   "});"
                 ]
@@ -284027,7 +284090,7 @@
           }
         },
         {
-          "name": "270.3 openai/gpt-4o-mini via /openai/v1/models/{model} retrieve carries context_window (catalog enrichment) - #7319",
+          "name": "270.3 openai/gpt-4o-mini via /openai/v1/models/{model} retrieve carries context_window (catalog enrichment) - #7319 - capability metadata",
           "event": [
             {
               "listen": "test",
@@ -284042,6 +284105,10 @@
                   "var entry = body;",
                   "pm.test('the catalog limits reach the drop-in route (#7319)', function () {",
                   "  pm.expect(entry, 'model not listed: ' + pm.response.text()).to.be.an('object');",
+                  "  pm.expect(entry.object, JSON.stringify(entry)).to.equal('model');",
+                  "  pm.expect(entry.mode, JSON.stringify(entry)).to.equal('chat');",
+                  "  pm.expect(entry.supported_endpoints, JSON.stringify(entry)).to.include('/v1/chat/completions');",
+                  "  pm.expect(entry.supported_methods, JSON.stringify(entry)).to.include('chat_completion');",
                   "  pm.expect(entry['context_window'], 'context_window missing on ' + JSON.stringify(entry)).to.be.a('number').above(0);",
                   "});"
                 ]

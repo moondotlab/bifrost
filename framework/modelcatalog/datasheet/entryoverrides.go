@@ -579,6 +579,10 @@ func (s *Store) dropRemovedOverrideOnlyParams() {
 		}
 		delete(s.supportedParams, model)
 		delete(s.supportedResponseTypes, model)
+		if key, ok := s.overrideMetadataKeys[model]; ok {
+			delete(s.parameterMetadata, key)
+			delete(s.overrideMetadataKeys, model)
+		}
 		delete(s.paramsOverrideOnly, model)
 	}
 }
