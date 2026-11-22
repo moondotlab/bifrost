@@ -24,6 +24,28 @@ func TestNewZhipuProviderDefaultBaseURL(t *testing.T) {
 	}
 }
 
+func TestProviderInterface(t *testing.T) {
+	t.Parallel()
+
+	var provider schemas.Provider = &zhipu.ZhipuProvider{}
+	decision, decisionErr := provider.Decision(nil, schemas.Key{}, nil)
+	if decision != nil || decisionErr == nil || decisionErr.ExtraFields.RequestType != schemas.DecisionRequest {
+		t.Fatalf("Decision() = (%+v, %+v), want a Decision error and no response", decision, decisionErr)
+	}
+
+	model, modelErr := provider.ModelRetrieve(nil, schemas.Key{}, nil)
+	if model != nil || modelErr == nil || modelErr.ExtraFields.RequestType != schemas.ModelRetrieveRequest {
+		t.Fatalf("ModelRetrieve() = (%+v, %+v), want a ModelRetrieve error and no response", model, modelErr)
+	}
+
+	for _, err := range []*schemas.BifrostError{decisionErr, modelErr} {
+		if err.ExtraFields.Provider != schemas.Zhipu || err.Error == nil ||
+			err.Error.Code == nil || *err.Error.Code != "unsupported_operation" {
+			t.Errorf("%s error = %+v, want unsupported_operation from %s", err.ExtraFields.RequestType, err, schemas.Zhipu)
+		}
+	}
+}
+
 func TestZhipu(t *testing.T) {
 	t.Parallel()
 	if strings.TrimSpace(os.Getenv("ZHIPU_API_KEY")) == "" {
