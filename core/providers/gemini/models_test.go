@@ -152,3 +152,10 @@ func TestModelRetrieve(t *testing.T) {
 	require.NotNil(t, bifrostErr)
 	assert.Equal(t, schemas.Ptr(http.StatusBadRequest), bifrostErr.StatusCode)
 }
+
+func TestGeminiModelMethodsKeepProviderVocabulary(t *testing.T) {
+	model := schemas.Model{ID: "gemini/gemini-2.5-pro", SupportedMethods: []string{"generateContent"}}
+	model.SetEnrichedSupportedMethods([]string{"generateContent", string(schemas.ChatCompletionRequest)})
+	resp := ToGeminiListModelsResponse(&schemas.BifrostListModelsResponse{Data: []schemas.Model{model}})
+	require.Equal(t, []string{"generateContent"}, resp.Models[0].SupportedGenerationMethods)
+}

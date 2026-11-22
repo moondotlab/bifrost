@@ -2,6 +2,7 @@ package openai
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -117,4 +118,36 @@ func TestModelRetrieveUpstreamErrorIsPropagated(t *testing.T) {
 	require.NotNil(t, bifrostErr)
 	require.Equal(t, schemas.Ptr(http.StatusNotFound), bifrostErr.StatusCode)
 	require.Contains(t, bifrostErr.Error.Message, "does not exist")
+}
+
+func TestOpenAIModelCapabilityJSON(t *testing.T) {
+	model := schemas.Model{ID: "model-id"}
+	check := func(want string) {
+		t.Helper()
+		item := ToOpenAIListModelsResponse(&schemas.BifrostListModelsResponse{Data: []schemas.Model{model}}).Data[0]
+		data, err := json.Marshal(item)
+		require.NoError(t, err)
+		require.JSONEq(t, want, string(data))
+
+		retrieved := ToOpenAIModelRetrieveResponse(&schemas.BifrostModelRetrieveResponse{Model: model})
+		data, err = json.Marshal(retrieved)
+		require.NoError(t, err)
+		require.JSONEq(t, want, string(data))
+	}
+	check(`{"id":"model-id","object":"model","owned_by":""}`)
+	model.Mode = "chat"
+	model.SupportedEndpoints = []string{"/v1/chat/completions"}
+	model.SupportedMethods = []string{string(schemas.ChatCompletionRequest)}
+	check(`{"id":"model-id","object":"model","owned_by":"","mode":"chat","supported_endpoints":["/v1/chat/completions"],"supported_methods":["chat_completion"]}`)
+
+	providerModel := ToOpenAIModelRetrieveResponse(&schemas.BifrostModelRetrieveResponse{Model: model})
+	retrieved := providerModel.ToBifrostModelRetrieveResponse(schemas.OpenAI)
+	listed := (&OpenAIListModelsResponse{Data: []OpenAIModel{*providerModel}}).
+		ToBifrostListModelsResponse(schemas.OpenAI, nil, nil, nil, true).Data
+	require.Len(t, listed, 1)
+	for _, got := range []schemas.Model{retrieved.Model, listed[0]} {
+		require.Equal(t, model.Mode, got.Mode)
+		require.Equal(t, model.SupportedEndpoints, got.SupportedEndpoints)
+		require.Equal(t, model.SupportedMethods, got.SupportedMethods)
+	}
 }

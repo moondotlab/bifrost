@@ -231,7 +231,7 @@
       "get": {
         "operationId": "listModels",
         "summary": "List available models",
-        "description": "Lists available models. If provider is not specified, lists all models from all configured providers.\n\nIf a virtual key is provided, Bifrost only lists (and only queries) providers allowed by that virtual key.\n",
+        "description": "Lists available models. If provider is not specified, lists all models from all configured providers.\n\nIf a virtual key is provided, Bifrost only lists (and only queries) providers allowed by that virtual key.\n\nModel list and retrieve responses include optional capability metadata when available. Catalog endpoint identifiers use gateway route templates without the deployment base path. Clients using a deployment base path must prepend it when calling these routes.\n",
         "tags": [
           "Models"
         ],
@@ -129711,8 +129711,20 @@
           "owned_by": {
             "type": "string"
           },
+          "mode": {
+            "type": "string",
+            "description": "Preferred catalog mode (chat, then responses, then completion, then the first remaining mode alphabetically) or the provider-reported mode. A model may support multiple modes."
+          },
+          "supported_endpoints": {
+            "type": "array",
+            "description": "Gateway route identifiers aggregated from catalog capabilities and provider-reported metadata. A listed route does not guarantee that every configured vendor implements that compatibility surface.",
+            "items": {
+              "type": "string"
+            }
+          },
           "supported_methods": {
             "type": "array",
+            "description": "Catalog request-type identifiers and provider-reported method names. Availability on compatibility surfaces varies by provider.",
             "items": {
               "type": "string"
             }

@@ -2,6 +2,7 @@ package anthropic_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -145,4 +146,30 @@ func TestAnthropicModelRetrieve(t *testing.T) {
 	_, bifrostErr = provider.ModelRetrieve(ctx, key, &schemas.BifrostModelRetrieveRequest{Model: "../models"})
 	require.NotNil(t, bifrostErr)
 	require.Equal(t, schemas.Ptr(http.StatusBadRequest), bifrostErr.StatusCode)
+}
+
+func TestAnthropicModelCapabilityJSON(t *testing.T) {
+	model := schemas.Model{ID: "model-id"}
+	check := func(want string) {
+		t.Helper()
+		item := anthropic.ToAnthropicListModelsResponse(&schemas.BifrostListModelsResponse{Data: []schemas.Model{model}}).Data[0]
+		data, err := json.Marshal(item)
+		require.NoError(t, err)
+		require.JSONEq(t, want, string(data))
+	}
+	check(`{"id":"model-id","type":"model","display_name":"","created_at":"0001-01-01T00:00:00Z"}`)
+	model.Mode = "chat"
+	model.SupportedEndpoints = []string{"/v1/chat/completions"}
+	model.SupportedMethods = []string{string(schemas.ChatCompletionRequest)}
+	check(`{"id":"model-id","type":"model","display_name":"","created_at":"0001-01-01T00:00:00Z","mode":"chat","supported_endpoints":["/v1/chat/completions"],"supported_methods":["chat_completion"]}`)
+
+	providerList := anthropic.ToAnthropicListModelsResponse(&schemas.BifrostListModelsResponse{Data: []schemas.Model{model}})
+	retrieved := providerList.Data[0].ToBifrostModelRetrieveResponse(schemas.Anthropic)
+	listed := providerList.ToBifrostListModelsResponse(schemas.Anthropic, nil, nil, nil, true).Data
+	require.Len(t, listed, 1)
+	for _, got := range []schemas.Model{retrieved.Model, listed[0]} {
+		require.Equal(t, model.Mode, got.Mode)
+		require.Equal(t, model.SupportedEndpoints, got.SupportedEndpoints)
+		require.Equal(t, model.SupportedMethods, got.SupportedMethods)
+	}
 }

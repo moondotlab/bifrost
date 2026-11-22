@@ -187,12 +187,28 @@ type Model struct {
 	// the 24-hour pricing sync.
 	AdditionalAttributes map[string]string `json:"additional_attributes,omitempty"`
 
-	OwnedBy          *string  `json:"owned_by,omitempty"`
-	SupportedMethods []string `json:"supported_methods,omitempty"`
+	OwnedBy            *string  `json:"owned_by,omitempty"`
+	Mode               string   `json:"mode,omitempty"`
+	SupportedEndpoints []string `json:"supported_endpoints,omitempty"`
+	SupportedMethods   []string `json:"supported_methods,omitempty"`
+	catalogMethodCount int
 
 	// ProviderExtra carries opaque provider-specific data (e.g. Anthropic capabilities)
 	// through the Bifrost pipeline for integration reverse-conversion. Never serialized.
 	ProviderExtra json.RawMessage `json:"-"`
+}
+
+// SetEnrichedSupportedMethods records a union with catalog methods appended
+// after the existing provider methods.
+func (m *Model) SetEnrichedSupportedMethods(methods []string) {
+	m.catalogMethodCount += len(methods) - len(m.SupportedMethods)
+	m.SupportedMethods = methods
+}
+
+// ProviderSupportedMethods returns the upstream methods for compatibility
+// formats whose method identifiers are specific to the upstream protocol.
+func (m *Model) ProviderSupportedMethods() []string {
+	return m.SupportedMethods[:len(m.SupportedMethods)-m.catalogMethodCount]
 }
 
 type Architecture struct {

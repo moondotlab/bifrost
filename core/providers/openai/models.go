@@ -34,10 +34,13 @@ func (response *OpenAIListModelsResponse) ToBifrostListModelsResponse(providerKe
 	for _, model := range response.Data {
 		for _, result := range pipeline.FilterModel(model.ID) {
 			entry := schemas.Model{
-				ID:            string(providerKey) + "/" + result.ResolvedID,
-				Created:       model.Created,
-				OwnedBy:       schemas.Ptr(model.OwnedBy),
-				ContextLength: model.ContextWindow,
+				ID:                 string(providerKey) + "/" + result.ResolvedID,
+				Created:            model.Created,
+				OwnedBy:            schemas.Ptr(model.OwnedBy),
+				ContextLength:      model.ContextWindow,
+				Mode:               model.Mode,
+				SupportedEndpoints: model.SupportedEndpoints,
+				SupportedMethods:   model.SupportedMethods,
 			}
 			if result.AliasValue != "" {
 				entry.Alias = schemas.Ptr(result.AliasValue)
@@ -61,11 +64,14 @@ func (model *OpenAIModel) ToBifrostModelRetrieveResponse(providerKey schemas.Mod
 
 	return &schemas.BifrostModelRetrieveResponse{
 		Model: schemas.Model{
-			ID:            string(providerKey) + "/" + model.ID,
-			Created:       model.Created,
-			OwnedBy:       schemas.Ptr(model.OwnedBy),
-			ContextLength: model.ContextWindow,
-			ShutdownDate:  model.ShutdownDate,
+			ID:                 string(providerKey) + "/" + model.ID,
+			Created:            model.Created,
+			OwnedBy:            schemas.Ptr(model.OwnedBy),
+			ContextLength:      model.ContextWindow,
+			Mode:               model.Mode,
+			SupportedEndpoints: model.SupportedEndpoints,
+			SupportedMethods:   model.SupportedMethods,
+			ShutdownDate:       model.ShutdownDate,
 		},
 	}
 }
@@ -78,10 +84,13 @@ func ToOpenAIModelRetrieveResponse(response *schemas.BifrostModelRetrieveRespons
 	}
 
 	openaiModel := &OpenAIModel{
-		ID:           response.ID,
-		Object:       "model",
-		Created:      response.Created,
-		ShutdownDate: response.ShutdownDate,
+		ID:                 response.ID,
+		Object:             "model",
+		Mode:               response.Mode,
+		SupportedEndpoints: response.SupportedEndpoints,
+		SupportedMethods:   response.SupportedMethods,
+		Created:            response.Created,
+		ShutdownDate:       response.ShutdownDate,
 	}
 	if response.OwnedBy != nil {
 		openaiModel.OwnedBy = *response.OwnedBy
@@ -104,8 +113,11 @@ func ToOpenAIListModelsResponse(response *schemas.BifrostListModelsResponse) *Op
 	}
 	for _, model := range response.Data {
 		openaiModel := OpenAIModel{
-			ID:     model.ID,
-			Object: "model",
+			ID:                 model.ID,
+			Object:             "model",
+			Mode:               model.Mode,
+			SupportedEndpoints: model.SupportedEndpoints,
+			SupportedMethods:   model.SupportedMethods,
 		}
 		if model.Created != nil {
 			openaiModel.Created = model.Created

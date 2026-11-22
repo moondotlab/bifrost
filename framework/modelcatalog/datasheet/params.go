@@ -229,6 +229,8 @@ func (s *Store) applyModelParameters(paramsData map[string]json.RawMessage) int 
 	}
 	paramsData, overrideOnly := s.withParamsEntryOverrides(paramsData)
 	newResponseTypes := make(map[string][]string, len(paramsData))
+	newMetadata := make(map[string]parameterModelMetadata)
+	newOverrideMetadataKeys := make(map[string]string)
 	newParamsIndex := make(map[string][]string, len(paramsData))
 	newModelKeys := make([]string, 0, len(paramsData))
 	applied := 0
@@ -250,6 +252,32 @@ func (s *Store) applyModelParameters(paramsData map[string]json.RawMessage) int 
 		if !IsEmptyModelCapabilities(&caps) {
 			applied++
 			newModelKeys = append(newModelKeys, model)
+		}
+
+		// Only attribute parameter metadata to a provider identified by the
+		// row itself or its qualified key. Bare unscoped rows can be ambiguous.
+		if len(caps.SupportedEndpoints) > 0 || caps.Mode != nil {
+			provider := schemas.ModelProvider(gjson.GetBytes(rawData, "provider").String())
+			prefix, bareModel := schemas.ParseModelString(model, "")
+			if provider == "" {
+				provider = prefix
+			}
+			if provider != "" {
+				providerName := metadataProvider(string(provider))
+				if metadataProvider(string(prefix)) != providerName {
+					bareModel = model
+				}
+				key := makeKeyNormalized(bareModel, providerName, "")
+				metadata := newMetadata[key]
+				metadata.endpoints = append(metadata.endpoints, caps.SupportedEndpoints...)
+				if caps.Mode != nil && *caps.Mode != "" {
+					metadata.modes = append(metadata.modes, *caps.Mode)
+				}
+				newMetadata[key] = metadata
+				if _, ok := overrideOnly[model]; ok {
+					newOverrideMetadataKeys[model] = key
+				}
+			}
 		}
 
 		outputs := make([]string, 0, len(caps.SupportedEndpoints))
@@ -302,7 +330,16 @@ func (s *Store) applyModelParameters(paramsData map[string]json.RawMessage) int 
 		return applied
 	}
 
+	for key, metadata := range newMetadata {
+		slices.Sort(metadata.endpoints)
+		metadata.endpoints = slices.Compact(metadata.endpoints)
+		metadata.modes = sortCapabilityModes(metadata.modes)
+		newMetadata[key] = metadata
+	}
+
 	s.mu.Lock()
+	s.parameterMetadata = newMetadata
+	s.overrideMetadataKeys = newOverrideMetadataKeys
 	s.supportedResponseTypes = newResponseTypes
 	s.supportedParams = newParamsIndex
 	s.paramsOverrideOnly = overrideOnly

@@ -47,12 +47,15 @@ func (response *AnthropicListModelsResponse) ToBifrostListModelsResponse(provide
 				continue
 			}
 			entry := schemas.Model{
-				ID:              string(providerKey) + "/" + result.ResolvedID,
-				Name:            schemas.Ptr(model.DisplayName),
-				Created:         schemas.Ptr(model.CreatedAt.Unix()),
-				MaxInputTokens:  model.MaxInputTokens,
-				MaxOutputTokens: model.MaxTokens,
-				ProviderExtra:   model.Capabilities,
+				ID:                 string(providerKey) + "/" + result.ResolvedID,
+				Name:               schemas.Ptr(model.DisplayName),
+				Created:            schemas.Ptr(model.CreatedAt.Unix()),
+				MaxInputTokens:     model.MaxInputTokens,
+				MaxOutputTokens:    model.MaxTokens,
+				ProviderExtra:      model.Capabilities,
+				Mode:               model.Mode,
+				SupportedEndpoints: model.SupportedEndpoints,
+				SupportedMethods:   model.SupportedMethods,
 			}
 			if result.AliasValue != "" {
 				entry.Alias = schemas.Ptr(result.AliasValue)
@@ -89,11 +92,14 @@ func ToAnthropicListModelsResponse(response *schemas.BifrostListModelsResponse) 
 	for _, model := range response.Data {
 		_, modelID := schemas.ParseModelString(model.ID, schemas.Anthropic)
 		anthropicModel := AnthropicModel{
-			ID:             modelID,
-			Type:           "model",
-			MaxInputTokens: model.MaxInputTokens,
-			MaxTokens:      model.MaxOutputTokens,
-			Capabilities:   model.ProviderExtra,
+			ID:                 modelID,
+			Type:               "model",
+			MaxInputTokens:     model.MaxInputTokens,
+			MaxTokens:          model.MaxOutputTokens,
+			Capabilities:       model.ProviderExtra,
+			Mode:               model.Mode,
+			SupportedEndpoints: model.SupportedEndpoints,
+			SupportedMethods:   model.SupportedMethods,
 		}
 		if model.Name != nil {
 			anthropicModel.DisplayName = *model.Name
@@ -115,12 +121,15 @@ func (model *AnthropicModel) ToBifrostModelRetrieveResponse(providerKey schemas.
 
 	return &schemas.BifrostModelRetrieveResponse{
 		Model: schemas.Model{
-			ID:              string(providerKey) + "/" + model.ID,
-			Name:            schemas.Ptr(model.DisplayName),
-			Created:         schemas.Ptr(model.CreatedAt.Unix()),
-			MaxInputTokens:  model.MaxInputTokens,
-			MaxOutputTokens: model.MaxTokens,
-			ProviderExtra:   model.Capabilities,
+			ID:                 string(providerKey) + "/" + model.ID,
+			Name:               schemas.Ptr(model.DisplayName),
+			Created:            schemas.Ptr(model.CreatedAt.Unix()),
+			MaxInputTokens:     model.MaxInputTokens,
+			MaxOutputTokens:    model.MaxTokens,
+			ProviderExtra:      model.Capabilities,
+			Mode:               model.Mode,
+			SupportedEndpoints: model.SupportedEndpoints,
+			SupportedMethods:   model.SupportedMethods,
 		},
 	}
 }

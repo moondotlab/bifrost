@@ -1690,6 +1690,9 @@ type OpenAIModel struct {
 	OwnedBy string `json:"owned_by"`
 	Created *int64 `json:"created,omitempty"`
 
+	Mode               string   `json:"mode,omitempty"`
+	SupportedEndpoints []string `json:"supported_endpoints,omitempty"`
+	SupportedMethods   []string `json:"supported_methods,omitempty"`
 	// Retirement date announced by the provider, returned by model retrieve
 	ShutdownDate *string `json:"shutdown_date,omitempty"`
 
