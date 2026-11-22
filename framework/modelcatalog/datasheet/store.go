@@ -59,10 +59,11 @@ type Store struct {
 	// return defensive copies of any slice/map they expose.
 	mu                     sync.RWMutex
 	pricingData            map[string]configstoreTables.TableModelPricing // model|provider|mode → row
-	modelModes             map[string][]string                            // normalized model/provider → preferred-first modes
-	familyModes            map[string][]string                            // normalized base model/provider → preferred-first modes
-	overrideMetadataKeys   map[string]string                              // synthetic parameter row → metadata index key
-	parameterMetadata      map[string]parameterModelMetadata              // normalized model/provider → parameter-sheet capabilities
+	modelModes             map[modelMetadataKey][]string                  // normalized model/provider → preferred-first modes
+	familyModes            map[modelMetadataKey][]string                  // normalized base model/provider → preferred-first modes
+	overrideMetadataKeys   map[string]modelMetadataKey                    // synthetic parameter row → metadata index key
+	modelConsensus         map[string]parameterModelMetadata              // normalized exact model name → shared capabilities
+	parameterMetadata      map[modelMetadataKey]parameterModelMetadata    // normalized model/provider → parameter-sheet capabilities
 	baseModelIndex         map[string]string                              // model → canonical base name
 	supportedResponseTypes map[string][]string                            // model → [chat_completion, responses, …]
 	supportedParams        map[string][]string                            // model → [temperature, top_p, …]

@@ -1,3 +1,4 @@
+- fix: model catalog fills missing custom-provider capabilities from exact-name catalog consensus when the provider has no exact record
 - feat: model catalog aggregates provider-scoped modes and endpoints for model lists and lookups
 - feat: model routers - `model_routers` and `model_router_targets` tables with config.json support, and the log-store tables and columns for phrase suggestions and routed requests
 - feat: client gateways - `oauth2_server_config.gateways` and device-code columns on `oauth2_authorize_requests` for Claude Code gateway sign-in

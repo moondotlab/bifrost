@@ -43,20 +43,11 @@ var modelMethodByEndpoint = func() map[string]schemas.RequestType {
 	return methods
 }()
 
-func (mc *ModelCatalog) enrichModelCapabilities(model *schemas.Model, name string, provider schemas.ModelProvider) {
+func (mc *ModelCatalog) enrichModelCapabilities(model *schemas.Model, name string, provider schemas.ModelProvider) bool {
 	if provider == "" {
-		return
+		return false
 	}
-	modes, endpoints := mc.modelMetadata(name, provider)
-	if (len(modes) == 0 || len(endpoints) == 0) && model.Alias != nil {
-		aliasModes, aliasEndpoints := mc.modelMetadata(*model.Alias, provider)
-		if len(modes) == 0 {
-			modes = aliasModes
-		}
-		if len(endpoints) == 0 {
-			endpoints = aliasEndpoints
-		}
-	}
+	modes, endpoints, scoped := mc.modelMetadata(name, model.Alias, provider)
 	if model.Mode == "" && len(modes) > 0 {
 		model.Mode = modes[0]
 	}
@@ -79,6 +70,7 @@ func (mc *ModelCatalog) enrichModelCapabilities(model *schemas.Model, name strin
 		}
 	}
 	model.SetEnrichedSupportedMethods(methods)
+	return scoped
 }
 
 func appendCapability(values []string, value string, owned *bool) []string {
@@ -92,31 +84,28 @@ func appendCapability(values []string, value string, owned *bool) []string {
 	return append(values, value)
 }
 
-func (mc *ModelCatalog) modelMetadata(name string, provider schemas.ModelProvider) (modes, endpoints []string) {
-	if mc.keyconf == nil {
-		return mc.datasheet.ModelMetadata(name, provider)
+func (mc *ModelCatalog) modelMetadata(name string, modelAlias *string, provider schemas.ModelProvider) (modes, endpoints []string, scoped bool) {
+	// Canonical name → wire ID → listed name, repeated for a provider-reported alias.
+	var candidates [6]string
+	count := mc.metadataCandidates(candidates[:], name, provider)
+	if modelAlias != nil {
+		count += mc.metadataCandidates(candidates[count:], *modelAlias, provider)
 	}
-	alias, ok := mc.keyconf.ResolveAlias(provider, name)
-	if !ok {
-		return mc.datasheet.ModelMetadata(name, provider)
-	}
+	custom := !slices.Contains(schemas.StandardProviders, provider) && schemas.IsKnownProvider(string(provider))
+	return mc.datasheet.ModelMetadataForCandidates(provider, custom, candidates[:count]...)
+}
 
-	// Same canonical name → wire ID → alias priority as capability lookup.
-	var canonicalName string
-	if alias.Config.ModelName != nil {
-		canonicalName = *alias.Config.ModelName
-	}
-	for _, candidate := range [...]string{canonicalName, alias.Config.ModelID, name} {
-		candidateModes, candidateEndpoints := mc.datasheet.ModelMetadata(candidate, provider)
-		if len(modes) == 0 {
-			modes = candidateModes
-		}
-		if len(endpoints) == 0 {
-			endpoints = candidateEndpoints
-		}
-		if len(modes) > 0 && len(endpoints) > 0 {
-			break
+func (mc *ModelCatalog) metadataCandidates(candidates []string, name string, provider schemas.ModelProvider) int {
+	if mc.keyconf != nil {
+		if alias, ok := mc.keyconf.ResolveAlias(provider, name); ok {
+			if alias.Config.ModelName != nil {
+				candidates[0] = *alias.Config.ModelName
+			}
+			candidates[1] = alias.Config.ModelID
+			candidates[2] = name
+			return 3
 		}
 	}
-	return modes, endpoints
+	candidates[0] = name
+	return 1
 }

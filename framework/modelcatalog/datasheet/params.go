@@ -229,8 +229,8 @@ func (s *Store) applyModelParameters(paramsData map[string]json.RawMessage) int 
 	}
 	paramsData, overrideOnly := s.withParamsEntryOverrides(paramsData)
 	newResponseTypes := make(map[string][]string, len(paramsData))
-	newMetadata := make(map[string]parameterModelMetadata)
-	newOverrideMetadataKeys := make(map[string]string)
+	newMetadata := make(map[modelMetadataKey]parameterModelMetadata)
+	newOverrideMetadataKeys := make(map[string]modelMetadataKey)
 	newParamsIndex := make(map[string][]string, len(paramsData))
 	newModelKeys := make([]string, 0, len(paramsData))
 	applied := 0
@@ -256,18 +256,13 @@ func (s *Store) applyModelParameters(paramsData map[string]json.RawMessage) int 
 
 		// Only attribute parameter metadata to a provider identified by the
 		// row itself or its qualified key. Bare unscoped rows can be ambiguous.
-		if len(caps.SupportedEndpoints) > 0 || caps.Mode != nil {
+		if len(caps.SupportedEndpoints) > 0 || (caps.Mode != nil && *caps.Mode != "") {
 			provider := schemas.ModelProvider(gjson.GetBytes(rawData, "provider").String())
-			prefix, bareModel := schemas.ParseModelString(model, "")
 			if provider == "" {
-				provider = prefix
+				provider, _ = schemas.ParseModelString(model, "")
 			}
 			if provider != "" {
-				providerName := metadataProvider(string(provider))
-				if metadataProvider(string(prefix)) != providerName {
-					bareModel = model
-				}
-				key := makeKeyNormalized(bareModel, providerName, "")
+				key := metadataKey(model, metadataProvider(string(provider)))
 				metadata := newMetadata[key]
 				metadata.endpoints = append(metadata.endpoints, caps.SupportedEndpoints...)
 				if caps.Mode != nil && *caps.Mode != "" {
@@ -339,6 +334,7 @@ func (s *Store) applyModelParameters(paramsData map[string]json.RawMessage) int 
 
 	s.mu.Lock()
 	s.parameterMetadata = newMetadata
+	s.rebuildModelConsensusUnsafe()
 	s.overrideMetadataKeys = newOverrideMetadataKeys
 	s.supportedResponseTypes = newResponseTypes
 	s.supportedParams = newParamsIndex

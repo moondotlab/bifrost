@@ -17,7 +17,8 @@ import (
 // mode), then the capability entry, which additionally resolves through the
 // canonical base model and the wider model family. That ordering keeps dated
 // model IDs like "gpt-4o-2024-08-06" resolvable even when only the family row
-// carries capability data.
+// carries capability data. Custom providers can also receive capability metadata
+// from exact-name consensus, independently of pricing.
 //
 // The returned *schemas.Model is freshly allocated and owned by the caller.
 func (mc *ModelCatalog) GetModelInfo(provider schemas.ModelProvider, model string) *schemas.Model {
@@ -31,13 +32,13 @@ func (mc *ModelCatalog) GetModelInfo(provider schemas.ModelProvider, model strin
 	}
 	info := &schemas.Model{ID: model}
 	ApplyModelInfo(info, entry)
-	mc.enrichModelCapabilities(info, model, provider)
+	scopedMetadata := mc.enrichModelCapabilities(info, model, provider)
 	if entry == nil && info.Mode == "" && len(info.SupportedEndpoints) == 0 {
 		return nil
 	}
 
-	if params := mc.datasheet.GetSupportedParameters(model); len(params) > 0 {
-		info.SupportedParameters = params
+	if entry != nil || scopedMetadata {
+		info.SupportedParameters = mc.datasheet.GetSupportedParameters(model)
 	}
 	return info
 }

@@ -620,3 +620,140 @@ func TestModelCapabilityMappingCoversPricingModes(t *testing.T) {
 		})
 	}
 }
+
+func TestCustomProviderModelCapabilityConsensus(t *testing.T) {
+	const (
+		provider = schemas.ModelProvider("modelflare")
+		name     = "deepseek-v4-flash"
+		id       = "modelflare/" + name
+		chat     = "/v1/chat/completions"
+	)
+	schemas.RegisterKnownProvider(provider)
+	t.Cleanup(func() { schemas.UnregisterKnownProvider(provider) })
+
+	params := filepath.Join(t.TempDir(), "params.json")
+	ds := datasheet.New(nil, bifrost.NewNoOpLogger(), datasheet.Config{ModelParametersURL: "file://" + params})
+	loadParams := func(data string) {
+		t.Helper()
+		require.NoError(t, os.WriteFile(params, []byte(data), 0o600))
+		require.NoError(t, ds.LoadModelParamsFromURLIntoMemory(t.Context()))
+	}
+	rows := []tables.TableModelPricing{
+		{Model: "deepseek/" + name, Provider: "deepseek", Mode: "chat", InputCostPerToken: new(0.001),
+			MaxInputTokens: new(1000), MaxOutputTokens: new(2000), ContextLength: new(3000), IsDeprecated: true},
+		{Model: name, Provider: "azure", Mode: "chat"},
+		{Model: name, Provider: "azure", Mode: "responses"},
+		{Model: "openrouter/deepseek/" + name, Provider: "openrouter", Mode: "embedding"},
+		{Model: "fireworks_ai/" + name, Provider: "fireworks_ai", Mode: "chat"},
+	}
+	ds.SetPricingRowsForTest(rows)
+	loadParams(`{
+		"azure/deepseek-v4-flash": {"supported_endpoints":["/v1/chat/completions","/v1/responses","/v1/messages"]},
+		"deepseek/other-model": {"mode":"chat"},
+		"deepseek-v4-flash": {"provider":"deepseek","supports_function_calling":true}
+	}`)
+
+	keys := keyconfig.New(nil)
+	keys.Replace(map[schemas.ModelProvider][]schemas.Key{
+		provider: {{ID: "key", Enabled: new(true), Models: schemas.WhiteList{"*"}, Aliases: schemas.KeyAliases{
+			"canonical":      {ModelID: "deployment", ModelName: new("deepseek/" + name)},
+			"wire":           {ModelID: name},
+			"qualified-wire": {ModelID: "deepseek/" + name},
+			"exact-wire":     {ModelID: "own-wire", ModelName: new("other-model")},
+			"exact-name":     {ModelID: name, ModelName: new("own-name")},
+		}}},
+	})
+	mc := &ModelCatalog{datasheet: ds, keyconf: keys}
+	enrich := func(model schemas.Model) schemas.Model {
+		t.Helper()
+		list := &schemas.BifrostListModelsResponse{Data: []schemas.Model{model}}
+		retrieve := &schemas.BifrostModelRetrieveResponse{Model: model}
+		mc.EnrichListModelsResponse(list)
+		mc.EnrichModelRetrieveResponse(retrieve)
+		require.Equal(t, list.Data[0], retrieve.Model)
+		return retrieve.Model
+	}
+	checkNoPricing := func(model schemas.Model) {
+		t.Helper()
+		require.Nil(t, model.Pricing)
+		require.Nil(t, model.MaxInputTokens)
+		require.Nil(t, model.MaxOutputTokens)
+		require.Nil(t, model.ContextLength)
+		require.False(t, model.IsDeprecated)
+	}
+	for _, model := range []schemas.Model{
+		{ID: id},
+		{ID: "modelflare/list-alias", Alias: new("deepseek/" + name)},
+		{ID: "modelflare/canonical"},
+		{ID: "modelflare/wire"},
+		{ID: "modelflare/qualified-wire"},
+	} {
+		got := enrich(model)
+		require.Equal(t, "chat", got.Mode, model.ID)
+		require.Equal(t, []string{chat}, got.SupportedEndpoints, model.ID)
+		require.Equal(t, []string{string(schemas.ChatCompletionRequest)}, got.SupportedMethods, model.ID)
+		checkNoPricing(got)
+	}
+	info := mc.GetModelInfo(provider, name)
+	require.NotNil(t, info)
+	require.Equal(t, "chat", info.Mode)
+	require.Equal(t, []string{chat}, info.SupportedEndpoints)
+	checkNoPricing(*info)
+	require.Contains(t, ds.GetSupportedParameters(name), "tools")
+	require.Empty(t, info.SupportedParameters)
+	require.Nil(t, mc.GetPricingEntryForModel(name, provider))
+	require.Nil(t, ds.GetCapabilityEntry(name, provider))
+
+	got := enrich(schemas.Model{ID: id, Mode: "reported", SupportedEndpoints: []string{"/reported"}, SupportedMethods: []string{"reported"}})
+	require.Equal(t, "reported", got.Mode)
+	require.Equal(t, []string{"/reported", chat}, got.SupportedEndpoints)
+	require.Equal(t, []string{"reported", string(schemas.ChatCompletionRequest)}, got.SupportedMethods)
+
+	loadParams(`{
+		"azure/deepseek-v4-flash": {"supported_endpoints":["/v1/chat/completions","/v1/ocr","/v1/responses","/v1/messages"]},
+		"deepseek/deepseek-v4-flash": {"supported_endpoints":["/v1/chat/completions","/v1/ocr","/vendor/deepseek"]}
+	}`)
+	got = enrich(schemas.Model{ID: id})
+	require.Equal(t, "chat", got.Mode)
+	require.Equal(t, []string{chat, "/v1/ocr"}, got.SupportedEndpoints)
+	require.Equal(t, []string{string(schemas.ChatCompletionRequest), string(schemas.OCRRequest)}, got.SupportedMethods)
+
+	loadParams(`{
+		"azure/deepseek-v4-flash": {"supported_endpoints":["/v1/responses"]},
+		"deepseek/deepseek-v4-flash": {"supported_endpoints":["/v1/messages"]},
+		"modelflare/own-name": {"mode":"rerank","supported_endpoints":["/vendor/modelflare"]}
+	}`)
+	require.Equal(t, []string{chat}, enrich(schemas.Model{ID: id}).SupportedEndpoints)
+	ds.SetPricingRowsForTest(append(slices.Clone(rows),
+		tables.TableModelPricing{Model: name, Provider: string(provider), Mode: "completion", InputCostPerToken: new(0.05)},
+		tables.TableModelPricing{Model: "own-wire", Provider: string(provider), Mode: "embedding"},
+	))
+	got = enrich(schemas.Model{ID: id})
+	require.Equal(t, "completion", got.Mode)
+	require.Equal(t, []string{"/v1/completions"}, got.SupportedEndpoints)
+	require.NotNil(t, got.Pricing)
+	require.Equal(t, "0.0500000000", *got.Pricing.Prompt)
+	got = enrich(schemas.Model{ID: "modelflare/exact-wire"})
+	require.Equal(t, "embedding", got.Mode)
+	require.Equal(t, []string{"/v1/embeddings"}, got.SupportedEndpoints)
+	got = enrich(schemas.Model{ID: "modelflare/exact-name"})
+	require.Equal(t, "rerank", got.Mode)
+	require.Equal(t, []string{"/v1/rerank", "/vendor/modelflare"}, got.SupportedEndpoints)
+
+	loadParams(`{"deepseek/other-model":{"mode":"chat"}}`)
+	ds.SetPricingRowsForTest([]tables.TableModelPricing{rows[0], rows[3],
+		{Model: name, Provider: "azure", Mode: "embedding"},
+	})
+	got = enrich(schemas.Model{ID: id})
+	require.Empty(t, got.Mode)
+	require.Empty(t, got.SupportedEndpoints)
+	require.Nil(t, mc.GetModelInfo(provider, name))
+
+	ds.SetPricingRowsForTest([]tables.TableModelPricing{rows[3],
+		{Model: name + "-2024-01-01", BaseModel: name, Provider: "deepseek", Mode: "chat"},
+	})
+	got = enrich(schemas.Model{ID: id})
+	require.Empty(t, got.Mode)
+	require.Empty(t, got.SupportedEndpoints)
+	require.Nil(t, mc.GetModelInfo(provider, name))
+}
