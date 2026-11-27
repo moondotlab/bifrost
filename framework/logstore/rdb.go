@@ -3545,6 +3545,11 @@ func (s *RDBLogStore) GetDimensionRankings(ctx context.Context, filters SearchFi
 	if _, isCommaList := commaListDimensions[dimension]; isCommaList {
 		return s.GetCommaListDimensionRankings(ctx, filters, dimension)
 	}
+	// metadata_<key> groups by a caller-chosen key inside the metadata JSON;
+	// like the JSON-field dimensions it has no column and no matview path.
+	if key, isMetadata := ParseMetadataDimension(string(dimension)); isMetadata {
+		return s.GetMetadataDimensionRankings(ctx, filters, dimension, key)
+	}
 
 	idCol, nameCol, ok := DimensionColumnDef(dimension)
 	if !ok {
@@ -4369,26 +4374,20 @@ func (s *RDBLogStore) buildProviderLatencyHistogramResult(computedBuckets map[in
 // GetDimensionCostHistogram returns time-bucketed cost data grouped by the specified dimension.
 // Uses the mv_logs_hourly materialized view on PostgreSQL when eligible; falls back to raw queries otherwise.
 func (s *RDBLogStore) GetDimensionCostHistogram(ctx context.Context, filters SearchFilters, bucketSizeSeconds int64, dimension HistogramDimension) (*DimensionCostHistogramResult, error) {
-	dimCol, ok := histogramDimensionColumn(dimension)
-	if !ok {
-		return nil, fmt.Errorf("invalid histogram dimension: %s", dimension)
-	}
 	if bucketSizeSeconds <= 0 {
 		bucketSizeSeconds = 3600
 	}
 	dialect := s.db.Dialector.Name()
-	// Rollup dimensions bucket owner-less traffic as "unassigned"; team /
-	// customer / business unit additionally fan out to every id the row carries.
-	// Both force the raw path — the matview reader has neither the unassigned
-	// bucket nor the array columns.
-	src := s.dimensionReadSourceFor(dimCol, "")
-	dimValueExpr := src.IDExpr
-	groupCol := dimValueExpr
-	if !src.Bucketed {
-		dimValueExpr = fmt.Sprintf("COALESCE(%s, '')", dimCol)
-		groupCol = dimCol
+	read, err := s.histogramDimensionReadFor(dimension, dialect)
+	if err != nil {
+		return nil, err
 	}
-	if !src.Bucketed && dialect == "postgres" && s.canUseMatView(filters) && bucketSizeSeconds >= 3600 {
+	src := read.src
+	dimValueExpr := read.dimValueExpr
+	groupCol := read.groupCol
+	// Metadata dimensions never read the matview: the hourly view carries
+	// fixed columns, never a caller-chosen key.
+	if read.metadataKey == "" && !src.Bucketed && dialect == "postgres" && s.canUseMatView(filters) && bucketSizeSeconds >= 3600 {
 		if res, err := s.getDimensionCostHistogramFromMatView(ctx, filters, bucketSizeSeconds, dimension); !s.fallBackToRaw(err) {
 			return res, err
 		}
@@ -4396,7 +4395,9 @@ func (s *RDBLogStore) GetDimensionCostHistogram(ctx context.Context, filters Sea
 	baseQuery := src.base(s.scopedLogsDB(ctx))
 	baseQuery = s.applyFilters(baseQuery, filters)
 	baseQuery = baseQuery.Where("status IN ?", terminalLogStatuses)
-	baseQuery = applyDimensionCeiling(ctx, baseQuery, src, dimCol)
+	if read.dimCol != "" {
+		baseQuery = applyDimensionCeiling(ctx, baseQuery, src, read.dimCol)
+	}
 	baseQuery = baseQuery.Where("cost IS NOT NULL AND cost > 0")
 
 	bucketExpr := unixBucketExpr(dialect, bucketSizeSeconds)
@@ -4415,6 +4416,20 @@ func (s *RDBLogStore) GetDimensionCostHistogram(ctx context.Context, filters Sea
 		Order("bucket_timestamp ASC").
 		Find(&results).Error; err != nil {
 		return nil, err
+	}
+
+	// Metadata values are caller-controlled, so their cardinality is
+	// unbounded in a way provider/team never are: collapse everything outside
+	// the window's top values into "other" or a stuffed key would spill an
+	// unbounded series set into the response. Merging is exact here because
+	// cost sums.
+	if read.metadataKey != "" {
+		keep := topDimensionValues(len(results), func(i int) string { return results[i].DimValue }, func(i int) float64 { return results[i].Cost }, maxMetadataDimensionHistogramValues)
+		for i := range results {
+			if !keep[results[i].DimValue] {
+				results[i].DimValue = metadataDimensionOtherValue
+			}
+		}
 	}
 
 	type bucketAgg struct {
@@ -4472,26 +4487,18 @@ func (s *RDBLogStore) GetDimensionCostHistogram(ctx context.Context, filters Sea
 // GetDimensionTokenHistogram returns time-bucketed token usage grouped by the specified dimension.
 // Uses the mv_logs_hourly materialized view on PostgreSQL when eligible; falls back to raw queries otherwise.
 func (s *RDBLogStore) GetDimensionTokenHistogram(ctx context.Context, filters SearchFilters, bucketSizeSeconds int64, dimension HistogramDimension) (*DimensionTokenHistogramResult, error) {
-	dimCol, ok := histogramDimensionColumn(dimension)
-	if !ok {
-		return nil, fmt.Errorf("invalid histogram dimension: %s", dimension)
-	}
 	if bucketSizeSeconds <= 0 {
 		bucketSizeSeconds = 3600
 	}
 	dialect := s.db.Dialector.Name()
-	// Rollup dimensions bucket owner-less traffic as "unassigned"; team /
-	// customer / business unit additionally fan out to every id the row carries.
-	// Both force the raw path — the matview reader has neither the unassigned
-	// bucket nor the array columns.
-	src := s.dimensionReadSourceFor(dimCol, "")
-	dimValueExpr := src.IDExpr
-	groupCol := dimValueExpr
-	if !src.Bucketed {
-		dimValueExpr = fmt.Sprintf("COALESCE(%s, '')", dimCol)
-		groupCol = dimCol
+	read, err := s.histogramDimensionReadFor(dimension, dialect)
+	if err != nil {
+		return nil, err
 	}
-	if !src.Bucketed && dialect == "postgres" && s.canUseMatView(filters) && bucketSizeSeconds >= 3600 {
+	src := read.src
+	dimValueExpr := read.dimValueExpr
+	groupCol := read.groupCol
+	if read.metadataKey == "" && !src.Bucketed && dialect == "postgres" && s.canUseMatView(filters) && bucketSizeSeconds >= 3600 {
 		if res, err := s.getDimensionTokenHistogramFromMatView(ctx, filters, bucketSizeSeconds, dimension); !s.fallBackToRaw(err) {
 			return res, err
 		}
@@ -4499,7 +4506,9 @@ func (s *RDBLogStore) GetDimensionTokenHistogram(ctx context.Context, filters Se
 	baseQuery := src.base(s.scopedLogsDB(ctx))
 	baseQuery = s.applyFilters(baseQuery, filters)
 	baseQuery = baseQuery.Where("status IN ?", terminalLogStatuses)
-	baseQuery = applyDimensionCeiling(ctx, baseQuery, src, dimCol)
+	if read.dimCol != "" {
+		baseQuery = applyDimensionCeiling(ctx, baseQuery, src, read.dimCol)
+	}
 
 	bucketExpr := unixBucketExpr(dialect, bucketSizeSeconds)
 
@@ -4521,6 +4530,17 @@ func (s *RDBLogStore) GetDimensionTokenHistogram(ctx context.Context, filters Se
 		Order("bucket_timestamp ASC").
 		Find(&results).Error; err != nil {
 		return nil, err
+	}
+
+	// Same cardinality collapse as the cost histogram; token sums merge
+	// exactly, and the ranking metric is the window's total tokens.
+	if read.metadataKey != "" {
+		keep := topDimensionValues(len(results), func(i int) string { return results[i].DimValue }, func(i int) float64 { return float64(results[i].TotalTokens) }, maxMetadataDimensionHistogramValues)
+		for i := range results {
+			if !keep[results[i].DimValue] {
+				results[i].DimValue = metadataDimensionOtherValue
+			}
+		}
 	}
 
 	type dimAgg struct {
@@ -4596,34 +4616,28 @@ func (s *RDBLogStore) GetDimensionTokenHistogram(ctx context.Context, filters Se
 // Uses the mv_logs_hourly materialized view on PostgreSQL when eligible; falls back to raw queries otherwise.
 // The fallback path computes AVG latency only (no percentiles) since percentile_cont is Postgres-specific.
 func (s *RDBLogStore) GetDimensionLatencyHistogram(ctx context.Context, filters SearchFilters, bucketSizeSeconds int64, dimension HistogramDimension) (*DimensionLatencyHistogramResult, error) {
-	dimCol, ok := histogramDimensionColumn(dimension)
-	if !ok {
-		return nil, fmt.Errorf("invalid histogram dimension: %s", dimension)
-	}
 	if bucketSizeSeconds <= 0 {
 		bucketSizeSeconds = 3600
 	}
-	// Rollup dimensions bucket owner-less traffic as "unassigned"; team /
-	// customer / business unit additionally fan out to every id the row carries.
-	// Both force the raw path — the matview reader has neither the unassigned
-	// bucket nor the array columns.
-	src := s.dimensionReadSourceFor(dimCol, "")
-	dimValueExpr := src.IDExpr
-	groupCol := dimValueExpr
-	if !src.Bucketed {
-		dimValueExpr = fmt.Sprintf("COALESCE(%s, '')", dimCol)
-		groupCol = dimCol
+	dialect := s.db.Dialector.Name()
+	read, err := s.histogramDimensionReadFor(dimension, dialect)
+	if err != nil {
+		return nil, err
 	}
-	if !src.Bucketed && s.db.Dialector.Name() == "postgres" && s.canUseMatView(filters) && bucketSizeSeconds >= 3600 {
+	src := read.src
+	dimValueExpr := read.dimValueExpr
+	groupCol := read.groupCol
+	if read.metadataKey == "" && !src.Bucketed && dialect == "postgres" && s.canUseMatView(filters) && bucketSizeSeconds >= 3600 {
 		if res, err := s.getDimensionLatencyHistogramFromMatView(ctx, filters, bucketSizeSeconds, dimension); !s.fallBackToRaw(err) {
 			return res, err
 		}
 	}
-	dialect := s.db.Dialector.Name()
 	baseQuery := src.base(s.scopedLogsDB(ctx))
 	baseQuery = s.applyFilters(baseQuery, filters)
 	baseQuery = baseQuery.Where("status IN ?", terminalLogStatuses)
-	baseQuery = applyDimensionCeiling(ctx, baseQuery, src, dimCol)
+	if read.dimCol != "" {
+		baseQuery = applyDimensionCeiling(ctx, baseQuery, src, read.dimCol)
+	}
 	baseQuery = baseQuery.Where("latency IS NOT NULL")
 
 	bucketExpr := unixBucketExpr(dialect, bucketSizeSeconds)
@@ -4646,6 +4660,19 @@ func (s *RDBLogStore) GetDimensionLatencyHistogram(ctx context.Context, filters 
 		return nil, err
 	}
 
+	// Same cardinality collapse as the cost histogram, ranked by request
+	// count. Unlike cost and tokens an average does not sum, so the merge
+	// below weights by request count - exact, because avg x count is the
+	// group's latency sum.
+	if read.metadataKey != "" {
+		keep := topDimensionValues(len(results), func(i int) string { return results[i].DimValue }, func(i int) float64 { return float64(results[i].TotalRequests) }, maxMetadataDimensionHistogramValues)
+		for i := range results {
+			if !keep[results[i].DimValue] {
+				results[i].DimValue = metadataDimensionOtherValue
+			}
+		}
+	}
+
 	type bucketAgg struct {
 		byDimension map[string]DimensionLatencyStats
 	}
@@ -4657,9 +4684,21 @@ func (s *RDBLogStore) GetDimensionLatencyHistogram(ctx context.Context, filters 
 			a = &bucketAgg{byDimension: make(map[string]DimensionLatencyStats)}
 			grouped[r.BucketTimestamp] = a
 		}
-		a.byDimension[r.DimValue] = DimensionLatencyStats{
-			AvgLatency:    r.AvgLatency,
-			TotalRequests: r.TotalRequests,
+		// Rows collapsed into "other" share one (bucket, value) key, so the
+		// merge must combine rather than overwrite; without the collapse a
+		// key is unique per bucket and the first branch never runs.
+		if prev, exists := a.byDimension[r.DimValue]; exists {
+			total := prev.TotalRequests + r.TotalRequests
+			merged := DimensionLatencyStats{TotalRequests: total}
+			if total > 0 {
+				merged.AvgLatency = (prev.AvgLatency*float64(prev.TotalRequests) + r.AvgLatency*float64(r.TotalRequests)) / float64(total)
+			}
+			a.byDimension[r.DimValue] = merged
+		} else {
+			a.byDimension[r.DimValue] = DimensionLatencyStats{
+				AvgLatency:    r.AvgLatency,
+				TotalRequests: r.TotalRequests,
+			}
 		}
 		dimSet[r.DimValue] = struct{}{}
 	}

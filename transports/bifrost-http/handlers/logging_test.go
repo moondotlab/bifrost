@@ -2431,3 +2431,54 @@ func BenchmarkSearchLogs(b *testing.B) {
 		h.searchLogs(ctx)
 	}
 }
+
+// TestParseDimension verifies the histogram dimension parameter accepts the
+// fixed dimensions and the compound metadata_<key> form, and rejects
+// everything else - including the system metadata keys, which are the
+// system's records rather than caller metadata.
+func TestParseDimension(t *testing.T) {
+	cases := []struct {
+		name  string
+		query string
+		want  string
+	}{
+		{"fixed dimension", "dimension=provider", "provider"},
+		{"user_agent dimension", "dimension=user_agent", "user_agent"},
+		{"metadata key", "dimension=metadata_origin", "metadata_origin"},
+		{"metadata key with dots and hyphens", "dimension=metadata_app.env-x", "metadata_app.env-x"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := &fasthttp.RequestCtx{}
+			ctx.Request.SetRequestURI("/api/logs/histogram/cost/by-dimension?" + tc.query)
+			dim, ok := parseDimension(ctx)
+			if !ok {
+				t.Fatalf("parseDimension(%s) rejected a valid dimension", tc.query)
+			}
+			if string(dim) != tc.want {
+				t.Fatalf("parseDimension(%s) = %q, want %q", tc.query, dim, tc.want)
+			}
+		})
+	}
+
+	rejected := []struct {
+		name  string
+		query string
+	}{
+		{"missing dimension", ""},
+		{"unknown dimension", "dimension=nonsense"},
+		{"empty metadata key", "dimension=metadata_"},
+		{"system metadata key", "dimension=metadata_isAsyncRequest"},
+		{"load balancer prefix", "dimension=metadata_bifrost_alb_decision"},
+		{"injection charset", "dimension=metadata_a%27b"},
+	}
+	for _, tc := range rejected {
+		t.Run("rejects "+tc.name, func(t *testing.T) {
+			ctx := &fasthttp.RequestCtx{}
+			ctx.Request.SetRequestURI("/api/logs/histogram/cost/by-dimension?" + tc.query)
+			if _, ok := parseDimension(ctx); ok {
+				t.Fatalf("parseDimension(%s) accepted an invalid dimension", tc.query)
+			}
+		})
+	}
+}

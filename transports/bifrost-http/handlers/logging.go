@@ -1886,16 +1886,22 @@ func (h *LoggingHandler) getLogsProviderThroughputHistogram(ctx *fasthttp.Reques
 	SendJSON(ctx, result)
 }
 
+// validHistogramDimensionValues is the valid-values text shared by the
+// histogram dimension errors. The metadata_<key> form groups by one caller
+// metadata key (e.g. metadata_origin), matching the metadata_<key> filter
+// parameter vocabulary.
+const validHistogramDimensionValues = "provider, team_id, customer_id, user_id, business_unit_id, project_id, app, user_agent, or metadata_<key> for any caller metadata key"
+
 // parseDimension extracts and validates the "dimension" query parameter.
 // Returns the validated HistogramDimension and true on success, or sends an error response and returns false.
 func parseDimension(ctx *fasthttp.RequestCtx) (logstore.HistogramDimension, bool) {
 	dim := logstore.HistogramDimension(string(ctx.QueryArgs().Peek("dimension")))
 	if dim == "" {
-		SendError(ctx, fasthttp.StatusBadRequest, "Missing required query parameter: dimension. Valid values: provider, team_id, customer_id, user_id, business_unit_id, project_id, app, user_agent")
+		SendError(ctx, fasthttp.StatusBadRequest, "Missing required query parameter: dimension. Valid values: "+validHistogramDimensionValues)
 		return "", false
 	}
-	if !logstore.ValidHistogramDimensions[dim] {
-		SendError(ctx, fasthttp.StatusBadRequest, fmt.Sprintf("Invalid dimension: %s. Valid values: provider, team_id, customer_id, user_id, business_unit_id, project_id, app, user_agent", dim))
+	if !logstore.IsValidHistogramDimension(dim) {
+		SendError(ctx, fasthttp.StatusBadRequest, fmt.Sprintf("Invalid dimension: %s. Valid values: %s", dim, validHistogramDimensionValues))
 		return "", false
 	}
 	return dim, true
@@ -2042,15 +2048,21 @@ func (h *LoggingHandler) getModelRankings(ctx *fasthttp.RequestCtx) {
 	SendJSON(ctx, result)
 }
 
+// validRankingDimensionValues is the valid-values text shared by the ranking
+// dimension errors. The metadata_<key> form groups by one caller metadata key
+// (e.g. metadata_origin), matching the metadata_<key> filter parameter
+// vocabulary.
+const validRankingDimensionValues = "team, customer, business_unit, project, user, virtual_key, app, user_agent, or metadata_<key> for any caller metadata key"
+
 // getDimensionRankings validates and serves rankings for the requested attribution dimension.
 func (h *LoggingHandler) getDimensionRankings(ctx *fasthttp.RequestCtx) {
 	dim := logstore.RankingDimension(string(ctx.QueryArgs().Peek("dimension")))
 	if dim == "" {
-		SendError(ctx, fasthttp.StatusBadRequest, "Missing required query parameter: dimension. Valid values: team, customer, business_unit, project, user, virtual_key, app, user_agent")
+		SendError(ctx, fasthttp.StatusBadRequest, "Missing required query parameter: dimension. Valid values: "+validRankingDimensionValues)
 		return
 	}
-	if !logstore.ValidRankingDimensions[dim] {
-		SendError(ctx, fasthttp.StatusBadRequest, fmt.Sprintf("Invalid dimension: %s. Valid values: team, customer, business_unit, project, user, virtual_key, app, user_agent", dim))
+	if !logstore.IsValidRankingDimension(dim) {
+		SendError(ctx, fasthttp.StatusBadRequest, fmt.Sprintf("Invalid dimension: %s. Valid values: %s", dim, validRankingDimensionValues))
 		return
 	}
 

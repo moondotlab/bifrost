@@ -2741,6 +2741,10 @@ logs-rankings-by-dimension:
       Note that the accepted `dimension` values differ from the ones the
       `/by-dimension` histogram endpoints take: rankings use `project` where the
       histograms use `project_id`.
+
+      Both accept the compound form `metadata_<key>` (for example
+      `metadata_origin`), which ranks the values of one caller metadata key -
+      the same keys the `metadata_<key>` filter parameters match on.
     tags:
       - Logging
     parameters:
@@ -2988,6 +2992,12 @@ logs-histogram-cost-by-dimension:
       (`provider`, `team_id`, `customer_id`, `user_id`, `business_unit_id`,
       `project_id`, `app`, `user_agent`). The dimension is supplied via the
       required `dimension` query parameter.
+
+      The compound form `metadata_<key>` (for example `metadata_origin`)
+      groups by one caller metadata key, matching the `metadata_<key>` filter
+      parameter vocabulary. Rows without the key aggregate under `unassigned`;
+      when more than 25 distinct values occur in the window, series outside
+      the top 25 merge into `other`.
     tags:
       - Logging
     parameters:

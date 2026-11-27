@@ -1293,15 +1293,18 @@ HistogramDimension:
   description: |
     Grouping dimension for dimension-aware histograms. Used by the
     `/api/logs/histogram/{cost,tokens,latency}/by-dimension` endpoints.
-  enum:
-    - provider
-    - team_id
-    - customer_id
-    - user_id
-    - business_unit_id
-    - project_id
-    - app
-    - user_agent
+
+    Fixed values: `provider`, `team_id`, `customer_id`, `user_id`,
+    `business_unit_id`, `project_id`, `app`, `user_agent`.
+
+    The compound form `metadata_<key>` groups by one caller metadata key
+    (for example `metadata_origin` groups by `metadata.origin`), matching the
+    `metadata_<key>` filter parameter vocabulary. Keys are alphanumeric with
+    dots, hyphens and underscores, at most 256 characters. Rows without the
+    key (or with a non-string value) aggregate under `unassigned`; when more
+    than 25 distinct values occur in the window, series outside the top 25
+    merge into `other`.
+  pattern: ^(provider|team_id|customer_id|user_id|business_unit_id|project_id|app|user_agent|metadata_[A-Za-z0-9._-]+)$
 
 DimensionCostHistogramBucket:
   type: object
@@ -1619,18 +1622,19 @@ MCPTopToolsResult:
 
 RankingDimension:
   type: string
-  description: Entity used to group dimension rankings
-  enum:
-    - team
-    - customer
-    - business_unit
-    - project
-    - user
-    - virtual_key
-    - app
-    - user_agent
-    - model_router
-    - complexity_tier
+  description: |
+    Entity used to group dimension rankings.
+
+    Fixed values: `team`, `customer`, `business_unit`, `project`, `user`,
+    `virtual_key`, `app`, `user_agent`, `model_router`, `complexity_tier`.
+
+    The compound form `metadata_<key>` groups by one caller metadata key
+    (for example `metadata_origin` groups by `metadata.origin`), matching the
+    `metadata_<key>` filter parameter vocabulary. Keys are alphanumeric with
+    dots, hyphens and underscores, at most 256 characters. Rows without the
+    key (or with a non-string value) aggregate under `unassigned`, so the
+    ranking rows are an additive split of the window's traffic.
+  pattern: ^(team|customer|business_unit|project|user|virtual_key|app|user_agent|model_router|complexity_tier|metadata_[A-Za-z0-9._-]+)$
 
 DimensionRankingEntry:
   type: object

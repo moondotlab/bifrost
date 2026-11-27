@@ -102134,7 +102134,7 @@
           "content": "**Required Permissions**\n\n| Permission | Granted via |\n| --- | --- |\n| `Dashboard:View` | RBAC role or API key scope |\n\n[How permissions work](/api/procuring-api-keys#required-permissions)\n"
         },
         "summary": "Get cost histogram by dimension",
-        "description": "Returns time-bucketed cost data grouped by an arbitrary dimension\n(`provider`, `team_id`, `customer_id`, `user_id`, `business_unit_id`,\n`project_id`, `app`, `user_agent`). The dimension is supplied via the\nrequired `dimension` query parameter.\n",
+        "description": "Returns time-bucketed cost data grouped by an arbitrary dimension\n(`provider`, `team_id`, `customer_id`, `user_id`, `business_unit_id`,\n`project_id`, `app`, `user_agent`). The dimension is supplied via the\nrequired `dimension` query parameter.\n\nThe compound form `metadata_<key>` (for example `metadata_origin`)\ngroups by one caller metadata key, matching the `metadata_<key>` filter\nparameter vocabulary. Rows without the key aggregate under `unassigned`;\nwhen more than 25 distinct values occur in the window, series outside\nthe top 25 merge into `other`.\n",
         "tags": [
           "Logging"
         ],
@@ -102146,17 +102146,8 @@
             "description": "Grouping dimension",
             "schema": {
               "type": "string",
-              "description": "Grouping dimension for dimension-aware histograms. Used by the\n`/api/logs/histogram/{cost,tokens,latency}/by-dimension` endpoints.\n",
-              "enum": [
-                "provider",
-                "team_id",
-                "customer_id",
-                "user_id",
-                "business_unit_id",
-                "project_id",
-                "app",
-                "user_agent"
-              ]
+              "description": "Grouping dimension for dimension-aware histograms. Used by the\n`/api/logs/histogram/{cost,tokens,latency}/by-dimension` endpoints.\n\nFixed values: `provider`, `team_id`, `customer_id`, `user_id`,\n`business_unit_id`, `project_id`, `app`, `user_agent`.\n\nThe compound form `metadata_<key>` groups by one caller metadata key\n(for example `metadata_origin` groups by `metadata.origin`), matching the\n`metadata_<key>` filter parameter vocabulary. Keys are alphanumeric with\ndots, hyphens and underscores, at most 256 characters. Rows without the\nkey (or with a non-string value) aggregate under `unassigned`; when more\nthan 25 distinct values occur in the window, series outside the top 25\nmerge into `other`.\n",
+              "pattern": "^(provider|team_id|customer_id|user_id|business_unit_id|project_id|app|user_agent|metadata_[A-Za-z0-9._-]+)$"
             }
           },
           {
@@ -102554,17 +102545,8 @@
                     },
                     "dimension": {
                       "type": "string",
-                      "description": "Grouping dimension for dimension-aware histograms. Used by the\n`/api/logs/histogram/{cost,tokens,latency}/by-dimension` endpoints.\n",
-                      "enum": [
-                        "provider",
-                        "team_id",
-                        "customer_id",
-                        "user_id",
-                        "business_unit_id",
-                        "project_id",
-                        "app",
-                        "user_agent"
-                      ]
+                      "description": "Grouping dimension for dimension-aware histograms. Used by the\n`/api/logs/histogram/{cost,tokens,latency}/by-dimension` endpoints.\n\nFixed values: `provider`, `team_id`, `customer_id`, `user_id`,\n`business_unit_id`, `project_id`, `app`, `user_agent`.\n\nThe compound form `metadata_<key>` groups by one caller metadata key\n(for example `metadata_origin` groups by `metadata.origin`), matching the\n`metadata_<key>` filter parameter vocabulary. Keys are alphanumeric with\ndots, hyphens and underscores, at most 256 characters. Rows without the\nkey (or with a non-string value) aggregate under `unassigned`; when more\nthan 25 distinct values occur in the window, series outside the top 25\nmerge into `other`.\n",
+                      "pattern": "^(provider|team_id|customer_id|user_id|business_unit_id|project_id|app|user_agent|metadata_[A-Za-z0-9._-]+)$"
                     },
                     "dimension_values": {
                       "type": "array",
@@ -102619,17 +102601,8 @@
             "description": "Grouping dimension",
             "schema": {
               "type": "string",
-              "description": "Grouping dimension for dimension-aware histograms. Used by the\n`/api/logs/histogram/{cost,tokens,latency}/by-dimension` endpoints.\n",
-              "enum": [
-                "provider",
-                "team_id",
-                "customer_id",
-                "user_id",
-                "business_unit_id",
-                "project_id",
-                "app",
-                "user_agent"
-              ]
+              "description": "Grouping dimension for dimension-aware histograms. Used by the\n`/api/logs/histogram/{cost,tokens,latency}/by-dimension` endpoints.\n\nFixed values: `provider`, `team_id`, `customer_id`, `user_id`,\n`business_unit_id`, `project_id`, `app`, `user_agent`.\n\nThe compound form `metadata_<key>` groups by one caller metadata key\n(for example `metadata_origin` groups by `metadata.origin`), matching the\n`metadata_<key>` filter parameter vocabulary. Keys are alphanumeric with\ndots, hyphens and underscores, at most 256 characters. Rows without the\nkey (or with a non-string value) aggregate under `unassigned`; when more\nthan 25 distinct values occur in the window, series outside the top 25\nmerge into `other`.\n",
+              "pattern": "^(provider|team_id|customer_id|user_id|business_unit_id|project_id|app|user_agent|metadata_[A-Za-z0-9._-]+)$"
             }
           },
           {
@@ -103038,17 +103011,8 @@
                     },
                     "dimension": {
                       "type": "string",
-                      "description": "Grouping dimension for dimension-aware histograms. Used by the\n`/api/logs/histogram/{cost,tokens,latency}/by-dimension` endpoints.\n",
-                      "enum": [
-                        "provider",
-                        "team_id",
-                        "customer_id",
-                        "user_id",
-                        "business_unit_id",
-                        "project_id",
-                        "app",
-                        "user_agent"
-                      ]
+                      "description": "Grouping dimension for dimension-aware histograms. Used by the\n`/api/logs/histogram/{cost,tokens,latency}/by-dimension` endpoints.\n\nFixed values: `provider`, `team_id`, `customer_id`, `user_id`,\n`business_unit_id`, `project_id`, `app`, `user_agent`.\n\nThe compound form `metadata_<key>` groups by one caller metadata key\n(for example `metadata_origin` groups by `metadata.origin`), matching the\n`metadata_<key>` filter parameter vocabulary. Keys are alphanumeric with\ndots, hyphens and underscores, at most 256 characters. Rows without the\nkey (or with a non-string value) aggregate under `unassigned`; when more\nthan 25 distinct values occur in the window, series outside the top 25\nmerge into `other`.\n",
+                      "pattern": "^(provider|team_id|customer_id|user_id|business_unit_id|project_id|app|user_agent|metadata_[A-Za-z0-9._-]+)$"
                     },
                     "dimension_values": {
                       "type": "array",
@@ -103103,17 +103067,8 @@
             "description": "Grouping dimension",
             "schema": {
               "type": "string",
-              "description": "Grouping dimension for dimension-aware histograms. Used by the\n`/api/logs/histogram/{cost,tokens,latency}/by-dimension` endpoints.\n",
-              "enum": [
-                "provider",
-                "team_id",
-                "customer_id",
-                "user_id",
-                "business_unit_id",
-                "project_id",
-                "app",
-                "user_agent"
-              ]
+              "description": "Grouping dimension for dimension-aware histograms. Used by the\n`/api/logs/histogram/{cost,tokens,latency}/by-dimension` endpoints.\n\nFixed values: `provider`, `team_id`, `customer_id`, `user_id`,\n`business_unit_id`, `project_id`, `app`, `user_agent`.\n\nThe compound form `metadata_<key>` groups by one caller metadata key\n(for example `metadata_origin` groups by `metadata.origin`), matching the\n`metadata_<key>` filter parameter vocabulary. Keys are alphanumeric with\ndots, hyphens and underscores, at most 256 characters. Rows without the\nkey (or with a non-string value) aggregate under `unassigned`; when more\nthan 25 distinct values occur in the window, series outside the top 25\nmerge into `other`.\n",
+              "pattern": "^(provider|team_id|customer_id|user_id|business_unit_id|project_id|app|user_agent|metadata_[A-Za-z0-9._-]+)$"
             }
           },
           {
@@ -103526,17 +103481,8 @@
                     },
                     "dimension": {
                       "type": "string",
-                      "description": "Grouping dimension for dimension-aware histograms. Used by the\n`/api/logs/histogram/{cost,tokens,latency}/by-dimension` endpoints.\n",
-                      "enum": [
-                        "provider",
-                        "team_id",
-                        "customer_id",
-                        "user_id",
-                        "business_unit_id",
-                        "project_id",
-                        "app",
-                        "user_agent"
-                      ]
+                      "description": "Grouping dimension for dimension-aware histograms. Used by the\n`/api/logs/histogram/{cost,tokens,latency}/by-dimension` endpoints.\n\nFixed values: `provider`, `team_id`, `customer_id`, `user_id`,\n`business_unit_id`, `project_id`, `app`, `user_agent`.\n\nThe compound form `metadata_<key>` groups by one caller metadata key\n(for example `metadata_origin` groups by `metadata.origin`), matching the\n`metadata_<key>` filter parameter vocabulary. Keys are alphanumeric with\ndots, hyphens and underscores, at most 256 characters. Rows without the\nkey (or with a non-string value) aggregate under `unassigned`; when more\nthan 25 distinct values occur in the window, series outside the top 25\nmerge into `other`.\n",
+                      "pattern": "^(provider|team_id|customer_id|user_id|business_unit_id|project_id|app|user_agent|metadata_[A-Za-z0-9._-]+)$"
                     },
                     "dimension_values": {
                       "type": "array",
@@ -105122,7 +105068,7 @@
           "content": "**Required Permissions**\n\n| Permission | Granted via |\n| --- | --- |\n| `Dashboard:View` | RBAC role or API key scope |\n\n[How permissions work](/api/procuring-api-keys#required-permissions)\n"
         },
         "summary": "Get rankings by governance dimension",
-        "description": "Returns the entities of one governance dimension ranked by spend, tokens\nand request volume, with trend percentages versus the previous comparable\nperiod. Requests carrying no value for the dimension are reported under an\n`Unassigned` entry rather than dropped, so the rows reconcile with real\ntraffic.\n\nNote that the accepted `dimension` values differ from the ones the\n`/by-dimension` histogram endpoints take: rankings use `project` where the\nhistograms use `project_id`.\n",
+        "description": "Returns the entities of one governance dimension ranked by spend, tokens\nand request volume, with trend percentages versus the previous comparable\nperiod. Requests carrying no value for the dimension are reported under an\n`Unassigned` entry rather than dropped, so the rows reconcile with real\ntraffic.\n\nNote that the accepted `dimension` values differ from the ones the\n`/by-dimension` histogram endpoints take: rankings use `project` where the\nhistograms use `project_id`.\n\nBoth accept the compound form `metadata_<key>` (for example\n`metadata_origin`), which ranks the values of one caller metadata key -\nthe same keys the `metadata_<key>` filter parameters match on.\n",
         "tags": [
           "Logging"
         ],
@@ -105134,19 +105080,8 @@
             "description": "The governance dimension to rank by.",
             "schema": {
               "type": "string",
-              "description": "Entity used to group dimension rankings",
-              "enum": [
-                "team",
-                "customer",
-                "business_unit",
-                "project",
-                "user",
-                "virtual_key",
-                "app",
-                "user_agent",
-                "model_router",
-                "complexity_tier"
-              ]
+              "description": "Entity used to group dimension rankings.\n\nFixed values: `team`, `customer`, `business_unit`, `project`, `user`,\n`virtual_key`, `app`, `user_agent`, `model_router`, `complexity_tier`.\n\nThe compound form `metadata_<key>` groups by one caller metadata key\n(for example `metadata_origin` groups by `metadata.origin`), matching the\n`metadata_<key>` filter parameter vocabulary. Keys are alphanumeric with\ndots, hyphens and underscores, at most 256 characters. Rows without the\nkey (or with a non-string value) aggregate under `unassigned`, so the\nranking rows are an additive split of the window's traffic.\n",
+              "pattern": "^(team|customer|business_unit|project|user|virtual_key|app|user_agent|model_router|complexity_tier|metadata_[A-Za-z0-9._-]+)$"
             }
           },
           {
@@ -105589,19 +105524,8 @@
                     },
                     "dimension": {
                       "type": "string",
-                      "description": "Entity used to group dimension rankings",
-                      "enum": [
-                        "team",
-                        "customer",
-                        "business_unit",
-                        "project",
-                        "user",
-                        "virtual_key",
-                        "app",
-                        "user_agent",
-                        "model_router",
-                        "complexity_tier"
-                      ]
+                      "description": "Entity used to group dimension rankings.\n\nFixed values: `team`, `customer`, `business_unit`, `project`, `user`,\n`virtual_key`, `app`, `user_agent`, `model_router`, `complexity_tier`.\n\nThe compound form `metadata_<key>` groups by one caller metadata key\n(for example `metadata_origin` groups by `metadata.origin`), matching the\n`metadata_<key>` filter parameter vocabulary. Keys are alphanumeric with\ndots, hyphens and underscores, at most 256 characters. Rows without the\nkey (or with a non-string value) aggregate under `unassigned`, so the\nranking rows are an additive split of the window's traffic.\n",
+                      "pattern": "^(team|customer|business_unit|project|user|virtual_key|app|user_agent|model_router|complexity_tier|metadata_[A-Za-z0-9._-]+)$"
                     },
                     "total_actual_requests": {
                       "type": "integer",
@@ -106945,19 +106869,8 @@
                           },
                           "dimension": {
                             "type": "string",
-                            "description": "Entity used to group dimension rankings",
-                            "enum": [
-                              "team",
-                              "customer",
-                              "business_unit",
-                              "project",
-                              "user",
-                              "virtual_key",
-                              "app",
-                              "user_agent",
-                              "model_router",
-                              "complexity_tier"
-                            ]
+                            "description": "Entity used to group dimension rankings.\n\nFixed values: `team`, `customer`, `business_unit`, `project`, `user`,\n`virtual_key`, `app`, `user_agent`, `model_router`, `complexity_tier`.\n\nThe compound form `metadata_<key>` groups by one caller metadata key\n(for example `metadata_origin` groups by `metadata.origin`), matching the\n`metadata_<key>` filter parameter vocabulary. Keys are alphanumeric with\ndots, hyphens and underscores, at most 256 characters. Rows without the\nkey (or with a non-string value) aggregate under `unassigned`, so the\nranking rows are an additive split of the window's traffic.\n",
+                            "pattern": "^(team|customer|business_unit|project|user|virtual_key|app|user_agent|model_router|complexity_tier|metadata_[A-Za-z0-9._-]+)$"
                           },
                           "total_actual_requests": {
                             "type": "integer",
@@ -128744,8 +128657,6 @@
           "fireworks",
           "sarvam",
           "wafer",
-          "zhipu",
-          "volcengine",
           "databricks",
           "cloudflare",
           "typesafe",
