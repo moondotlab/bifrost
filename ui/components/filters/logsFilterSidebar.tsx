@@ -23,6 +23,7 @@ import {
 	LEGACY_COMPLEXITY_TIER_VALUES,
 } from "@/lib/types/complexityRouter";
 import { useGetModelRoutersQuery } from "@/lib/store/apis/governanceApi";
+import { formatCostBound, parseCostBound } from "@/lib/utils/relayLogQuery";
 import type { LogFilters } from "@/lib/types/logs";
 import { cn } from "@/lib/utils";
 import { metadataFilterValueCount, normalizeMetadataFilters, toggleMetadataFilterValue } from "@/lib/utils/metadataFilters";
@@ -149,6 +150,7 @@ export function LogsFilterSidebar({ filters, onFiltersChange }: LogsSidebarProps
 					<TopicFilter filters={filters} onFiltersChange={onFiltersChange} />
 					<SessionFilter filters={filters} onFiltersChange={onFiltersChange} />
 					<CostFilter filters={filters} onFiltersChange={onFiltersChange} />
+					<TokensFilter filters={filters} onFiltersChange={onFiltersChange} />
 					<StopReasonFilter filters={filters} onFiltersChange={onFiltersChange} />
 					<ToolCallsFilter filters={filters} onFiltersChange={onFiltersChange} />
 					<MetadataFilters filters={filters} onFiltersChange={onFiltersChange} />
@@ -1539,19 +1541,129 @@ function TopicFilter({ filters, onFiltersChange, defaultOpen }: FilterComponentP
 }
 
 // ---------------------------------------------------------------------------
+// NumberRangeFilter – min/max numeric bounds. Zero is a real bound (max 0 =
+// free calls only), so inputs commit on blur or Enter and an empty field
+// clears that bound.
+// ---------------------------------------------------------------------------
+
+function NumberRangeFilter({
+	filters,
+	onFiltersChange,
+	minKey,
+	maxKey,
+	minLabel,
+	maxLabel,
+	testIdPrefix,
+}: {
+	filters: LogFilters;
+	onFiltersChange: (filters: LogFilters) => void;
+	minKey: "min_cost" | "min_tokens";
+	maxKey: "max_cost" | "max_tokens";
+	minLabel: string;
+	maxLabel: string;
+	testIdPrefix: string;
+}) {
+	const minValue = filters[minKey];
+	const maxValue = filters[maxKey];
+	const [minText, setMinText] = useState(formatCostBound(minValue));
+	const [maxText, setMaxText] = useState(formatCostBound(maxValue));
+
+	// Mirror the URL back into the fields when a bound changes elsewhere (reset, clear, navigation).
+	useEffect(() => setMinText(formatCostBound(minValue)), [minValue]);
+	useEffect(() => setMaxText(formatCostBound(maxValue)), [maxValue]);
+
+	const commit = (key: "min_cost" | "max_cost" | "min_tokens" | "max_tokens", raw: string) => {
+		const next = parseCostBound(raw);
+		if (next === filters[key]) return;
+		onFiltersChange({ ...filters, [key]: next });
+	};
+	const onKeyDown = (key: "min_cost" | "max_cost" | "min_tokens" | "max_tokens") => (event: React.KeyboardEvent<HTMLInputElement>) => {
+		if (event.key === "Enter") {
+			event.preventDefault();
+			commit(key, event.currentTarget.value);
+		}
+	};
+
+	return (
+		<div className="grid grid-cols-2 gap-2 px-3 py-2">
+			<Input
+				type="number"
+				inputMode="decimal"
+				min={0}
+				step="any"
+				value={minText}
+				onChange={(event) => setMinText(event.target.value)}
+				onBlur={(event) => commit(minKey, event.target.value)}
+				onKeyDown={onKeyDown(minKey)}
+				placeholder={minLabel}
+				aria-label={minLabel}
+				className="h-8 text-xs"
+				data-testid={`${testIdPrefix}-min`}
+			/>
+			<Input
+				type="number"
+				inputMode="decimal"
+				min={0}
+				step="any"
+				value={maxText}
+				onChange={(event) => setMaxText(event.target.value)}
+				onBlur={(event) => commit(maxKey, event.target.value)}
+				onKeyDown={onKeyDown(maxKey)}
+				placeholder={maxLabel}
+				aria-label={maxLabel}
+				className="h-8 text-xs"
+				data-testid={`${testIdPrefix}-max`}
+			/>
+		</div>
+	);
+}
+
+// ---------------------------------------------------------------------------
 // CostFilter
 // ---------------------------------------------------------------------------
 
 function CostFilter({ filters, onFiltersChange, defaultOpen }: FilterComponentProps) {
 	const { t } = useTranslation("observability");
-	const hasActive = !!filters.missing_cost_only;
+	const hasActive =
+		!!filters.missing_cost_only || filters.min_cost !== undefined || filters.max_cost !== undefined;
 	return (
 		<FilterSection title={t("logs.stats.tooltipCost")} defaultOpen={defaultOpen || hasActive} testId="cost-filter-toggle">
+			<NumberRangeFilter
+				filters={filters}
+				onFiltersChange={onFiltersChange}
+				minKey="min_cost"
+				maxKey="max_cost"
+				minLabel={t("filters.minCost")}
+				maxLabel={t("filters.maxCost")}
+				testIdPrefix="logs-cost-filter"
+			/>
 			<CheckboxFilterItem
 				label={t("filters.showMissingCostOnly")}
 				checked={!!filters.missing_cost_only}
 				onCheckedChange={(checked) => onFiltersChange({ ...filters, missing_cost_only: !!checked })}
 				testId="cost-filter-missing-only-checkbox"
+			/>
+		</FilterSection>
+	);
+}
+
+// ---------------------------------------------------------------------------
+// TokensFilter – min/max bounds on total tokens per request
+// ---------------------------------------------------------------------------
+
+function TokensFilter({ filters, onFiltersChange, defaultOpen }: FilterComponentProps) {
+	const { t } = useTranslation("observability");
+	const hasActive = filters.min_tokens !== undefined || filters.max_tokens !== undefined;
+	return (
+		<FilterSection title={t("labels.tokens")} defaultOpen={defaultOpen || hasActive} testId="tokens-filter-toggle">
+			<NumberRangeFilter
+				filters={filters}
+				onFiltersChange={onFiltersChange}
+				minKey="min_tokens"
+				maxKey="max_tokens"
+				minLabel={t("filters.minTokens")}
+				maxLabel={t("filters.maxTokens")}
+				testIdPrefix="logs-tokens-filter"
 			/>
 		</FilterSection>
 	);
