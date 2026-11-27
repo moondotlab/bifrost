@@ -320,6 +320,10 @@ type BedrockDocumentSourceData struct {
 	Text       *string                       `json:"text,omitempty"`       // Plain text content; Converse rejects it unless the block enables citations
 	S3Location *BedrockS3Location            `json:"s3Location,omitempty"` // Optional: S3 location (model-dependent support)
 	Content    []BedrockDocumentContentBlock `json:"content,omitempty"`
+
+	// URL carries an Anthropic-native url source from the InvokeModel ingress. It is not part
+	// of Converse and never serialized; the Converse egress fetches and inlines it.
+	URL *string `json:"-"`
 }
 
 // BedrockVideoBlock represents a video content block.

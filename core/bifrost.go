@@ -4,6 +4,7 @@
 package bifrost
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -7741,6 +7742,7 @@ func executeRequestWithRetries[T any](
 			ctx.ClearValue(schemas.BifrostContextKeyStreamEndIndicator)
 			ctx.ClearValue(schemas.BifrostContextKeyStreamBodyExhausted)
 			ctx.ClearValue(schemas.BifrostContextKeyStreamParkedAfterFinish)
+			ctx.ClearValue(schemas.BifrostContextKeyStreamProviderJob)
 			if traceID, ok := ctx.Value(schemas.BifrostContextKeyTraceID).(string); ok && traceID != "" {
 				tracer.ResetStreamAccumulator(traceID)
 			}
@@ -8110,32 +8112,108 @@ func disableAnthropicPassthrough(ctx *schemas.BifrostContext) {
 // the request like any other. Gemini keeps it. Vertex keeps it for the models it serves with a
 // Google body (Gemini, Gemma, Imagen, Veo and numeric tuned endpoints), for batch jobs, whose body
 // is the job definition and which Vertex runs for Claude and Llama too, and for file and
-// cached-content requests, which name no model or a Gemini one; a Claude, Mistral or other Model
+// cached-content requests, which name no model or a Gemini one, and for Interactions agents, which
+// Vertex runs on /interactions with the caller's body (responses tells one the model name does
+// not give away); a Claude, Mistral or other Model
 // Garden model on Vertex is sent an Anthropic or OpenAI body, so it is converted. Call
 // this only after key-level alias resolution: the family predicates read the resolved alias.
 // Re-runs per attempt, so a fallback after a Gemini primary is caught. No-op outside the GenAI
 // integration.
-func clearGenAIPassthroughForNonGoogleProvider(ctx *schemas.BifrostContext, baseProvider schemas.ModelProvider, requestType schemas.RequestType, model string) {
+func clearGenAIPassthroughForNonGoogleProvider(ctx *schemas.BifrostContext, baseProvider schemas.ModelProvider, requestType schemas.RequestType, model string, responses *schemas.BifrostResponsesRequest) {
 	if integrationType, _ := ctx.Value(schemas.BifrostContextKeyIntegrationType).(string); integrationType != "genai" {
 		return
 	}
 	if baseProvider == schemas.Gemini {
+		restoreGenAIPassthrough(ctx)
 		return
 	}
 	if baseProvider == schemas.Vertex && schemas.GetVertexEndpoint(ctx) != nil {
-		ctx.SetValue(schemas.BifrostContextKeyUseRawRequestBody, false)
-		ctx.ClearValue(schemas.BifrostContextKeyRawRequestBodyTextRewriter)
+		suspendGenAIPassthrough(ctx)
 		return
 	}
+	// A Vertex Interactions read, cancel or delete names no model; it is still Google's own call.
 	if baseProvider == schemas.Vertex &&
 		(isBatchRequestType(requestType) || isFileRequestType(requestType) || isCachedContentRequestType(requestType) ||
+			isResponsesLifecycleRequestType(requestType) ||
+			gemini.IsGeminiInteractionsAgent(model) || gemini.IsGeminiInteractionsAgentRequest(ctx, responses) ||
 			schemas.IsGeminiModelFamily(ctx, model) || schemas.IsGemmaModelFamily(ctx, model) ||
 			schemas.IsImagenModelFamily(ctx, model) || schemas.IsVeoModelFamily(ctx, model) ||
 			schemas.IsAllDigitsASCII(model)) {
+		restoreGenAIPassthrough(ctx)
 		return
+	}
+	suspendGenAIPassthrough(ctx)
+}
+
+// genAITranslationRefusal refuses a translated attempt of a GenAI Interactions request that holds something
+// only Google serves. The route records why when it converts the request; a routing rule or a fallback may
+// pick another provider after that, which would be sent the request without it. A native attempt is never
+// refused. Call it after clearGenAIPassthroughForNonGoogleProvider, which decides which this is.
+func genAITranslationRefusal(ctx *schemas.BifrostContext) *schemas.BifrostError {
+	reason, _ := ctx.Value(schemas.BifrostContextKeyGenAITranslationRefusal).(string)
+	if reason == "" {
+		return nil
+	}
+	if native, _ := ctx.Value(schemas.BifrostContextKeyUseRawRequestBody).(bool); native {
+		return nil
+	}
+	return providerUtils.NewBifrostBadRequestError(reason)
+}
+
+// genAIPassthroughSuspended holds what a non-Google attempt switched off (the raw-body flag, the
+// guardrail rewriter and the raw-response passthrough override), so a later Google attempt in the
+// same fallback chain gets them back.
+type genAIPassthroughSuspended struct {
+	rewriter       schemas.RawRequestBodyTextRewriter
+	sendBackRaw    *bool
+	overridePassed bool
+}
+
+// genAIPassthroughSuspendedKey stores a genAIPassthroughSuspended on the request context.
+const genAIPassthroughSuspendedKey schemas.BifrostContextKey = "bifrost-genai-passthrough-suspended"
+
+// suspendGenAIPassthrough turns the raw body off for a non-Google attempt, remembering what it
+// turned off. Only a request that had the raw body on is remembered.
+func suspendGenAIPassthrough(ctx *schemas.BifrostContext) {
+	if raw, _ := ctx.Value(schemas.BifrostContextKeyUseRawRequestBody).(bool); raw {
+		if _, saved := ctx.Value(genAIPassthroughSuspendedKey).(*genAIPassthroughSuspended); !saved {
+			rewriter, _ := ctx.Value(schemas.BifrostContextKeyRawRequestBodyTextRewriter).(schemas.RawRequestBodyTextRewriter)
+			suspended := &genAIPassthroughSuspended{rewriter: rewriter}
+			if v, ok := ctx.Value(schemas.BifrostContextKeySendBackRawResponse).(bool); ok {
+				suspended.sendBackRaw = &v
+			}
+			suspended.overridePassed, _ = ctx.Value(schemas.BifrostContextKeyPassthroughOverridesPresent).(bool)
+			ctx.SetValue(genAIPassthroughSuspendedKey, suspended)
+			// A translated attempt sends back no raw response, so the passthrough override that
+			// asked for one goes too, as disableAnthropicPassthrough does.
+			if suspended.overridePassed {
+				ctx.SetValue(schemas.BifrostContextKeySendBackRawResponse, false)
+				ctx.SetValue(schemas.BifrostContextKeyPassthroughOverridesPresent, false)
+			}
+		}
 	}
 	ctx.SetValue(schemas.BifrostContextKeyUseRawRequestBody, false)
 	ctx.ClearValue(schemas.BifrostContextKeyRawRequestBodyTextRewriter)
+}
+
+// restoreGenAIPassthrough turns the raw body back on for a Google attempt that follows a
+// non-Google one. It does nothing for a request whose raw body was never switched off.
+func restoreGenAIPassthrough(ctx *schemas.BifrostContext) {
+	saved, ok := ctx.Value(genAIPassthroughSuspendedKey).(*genAIPassthroughSuspended)
+	if !ok {
+		return
+	}
+	ctx.SetValue(schemas.BifrostContextKeyUseRawRequestBody, true)
+	if saved.rewriter != nil {
+		ctx.SetValue(schemas.BifrostContextKeyRawRequestBodyTextRewriter, saved.rewriter)
+	}
+	if saved.overridePassed {
+		ctx.SetValue(schemas.BifrostContextKeyPassthroughOverridesPresent, true)
+		if saved.sendBackRaw != nil {
+			ctx.SetValue(schemas.BifrostContextKeySendBackRawResponse, *saved.sendBackRaw)
+		}
+	}
+	ctx.ClearValue(genAIPassthroughSuspendedKey)
 }
 
 // clearAnthropicPassthroughForUnsupportedStructuredOutput disables Anthropic raw-body passthrough
@@ -8414,6 +8492,7 @@ func (bifrost *Bifrost) requestWorker(provider schemas.Provider, config *schemas
 						})
 						continue
 					}
+					keys = narrowVertexInteractionsKeys(req.Context, baseProvider, req.RequestType, model, keys)
 				} else {
 					// Build the key pool for this request. Selection and rotation are deferred to
 					// executeRequestWithRetries via keyProvider so that each retry attempt can use
@@ -8443,6 +8522,16 @@ func (bifrost *Bifrost) requestWorker(provider schemas.Provider, config *schemas
 								ErrorType:              schemas.ErrorTypeCallerModelNotAvailable,
 							},
 						})
+						continue
+					}
+
+					var placeErr *schemas.BifrostError
+					if supportedKeys, placeErr = narrowContinuationKeys(req.Context, provider, &req.BifrostRequest, supportedKeys); placeErr != nil {
+						placeErr.ExtraFields.Provider = provider.GetProviderKey()
+						placeErr.ExtraFields.RequestType = req.RequestType
+						placeErr.ExtraFields.OriginalModelRequested = model
+						placeErr.ExtraFields.ResolvedModelUsed = model
+						bifrost.sendWorkerError(req, *placeErr)
 						continue
 					}
 
@@ -8554,7 +8643,10 @@ func (bifrost *Bifrost) requestWorker(provider schemas.Provider, config *schemas
 				// Disable it too when this attempt's provider has no native structured outputs.
 				clearAnthropicPassthroughForUnsupportedStructuredOutput(req.Context, baseProvider, &req.BifrostRequest)
 				// Disable GenAI raw-body passthrough when this attempt's provider isn't Google's.
-				clearGenAIPassthroughForNonGoogleProvider(req.Context, baseProvider, req.RequestType, resolvedModel)
+				clearGenAIPassthroughForNonGoogleProvider(req.Context, baseProvider, req.RequestType, resolvedModel, req.ResponsesRequest)
+				if refusal := genAITranslationRefusal(req.Context); refusal != nil {
+					return nil, refusal
+				}
 				injectedTools := bifrost.injectedToolsForAttempt(req.Context, config, &req.BifrostRequest, baseProvider, resolvedModel)
 				injectedTools = clearAnthropicPassthroughForInjectedTools(req.Context, injectedTools, &req.BifrostRequest)
 				applyRawCaptureSignals(req.Context, config)
@@ -8699,7 +8791,10 @@ func (bifrost *Bifrost) requestWorker(provider schemas.Provider, config *schemas
 				// Disable it too when this attempt's provider has no native structured outputs.
 				clearAnthropicPassthroughForUnsupportedStructuredOutput(req.Context, baseProvider, &req.BifrostRequest)
 				// Disable GenAI raw-body passthrough when this attempt's provider isn't Google's.
-				clearGenAIPassthroughForNonGoogleProvider(req.Context, baseProvider, req.RequestType, resolvedModel)
+				clearGenAIPassthroughForNonGoogleProvider(req.Context, baseProvider, req.RequestType, resolvedModel, req.ResponsesRequest)
+				if refusal := genAITranslationRefusal(req.Context); refusal != nil {
+					return nil, refusal
+				}
 				injectedTools := bifrost.injectedToolsForAttempt(req.Context, config, &req.BifrostRequest, baseProvider, resolvedModel)
 				injectedTools = clearAnthropicPassthroughForInjectedTools(req.Context, injectedTools, &req.BifrostRequest)
 				applyRawCaptureSignals(req.Context, config)
@@ -9039,28 +9134,46 @@ func resolveRawAdvisorToolAliases(aliases schemas.KeyAliases, body []byte) []byt
 	if !tools.IsArray() {
 		return nil
 	}
-	var paths, models []string
-	index := 0
-	tools.ForEach(func(_, tool gjson.Result) bool {
-		if model := tool.Get("model"); model.Type == gjson.String && strings.HasPrefix(tool.Get("type").String(), "advisor") {
-			if resolved, ok := resolveToolModelAlias(aliases, model.Str); ok {
-				paths = append(paths, fmt.Sprintf("tools.%d.model", index))
-				models = append(models, resolved)
-			}
+	aliasedModel := func(tool gjson.Result) (string, bool) {
+		model := tool.Get("model")
+		if model.Type != gjson.String || !strings.HasPrefix(tool.Get("type").String(), "advisor") {
+			return "", false
 		}
-		index++
-		return true
+		return resolveToolModelAlias(aliases, model.Str)
+	}
+	// Find a match before building anything, so a request with no aliased advisor tool allocates
+	// nothing proportional to its tools.
+	matched := false
+	tools.ForEach(func(_, tool gjson.Result) bool {
+		_, matched = aliasedModel(tool)
+		return !matched
 	})
-	if len(paths) == 0 {
+	if !matched {
 		return nil
 	}
-	out := body
-	for i := range paths {
-		updated, err := providerUtils.SetJSONField(out, paths[i], models[i])
-		if err != nil {
-			return nil
+	// Each aliased tool is rewritten in its own bytes and the tools array is set once, so N advisor
+	// tools cost one body copy rather than N.
+	elems := make([][]byte, 0, len(tools.Array()))
+	failed := false
+	tools.ForEach(func(_, tool gjson.Result) bool {
+		raw := []byte(tool.Raw)
+		if resolved, ok := aliasedModel(tool); ok {
+			updated, err := providerUtils.SetJSONField(raw, "model", resolved)
+			if err != nil {
+				failed = true
+				return false
+			}
+			raw = updated
 		}
-		out = updated
+		elems = append(elems, raw)
+		return true
+	})
+	if failed {
+		return nil
+	}
+	out, err := providerUtils.SetRawJSONField(body, "tools", append(append([]byte{'['}, bytes.Join(elems, []byte{','})...), ']'))
+	if err != nil {
+		return nil
 	}
 	return out
 }
@@ -9199,6 +9312,13 @@ func prepareResponsesRequest(ctx *schemas.BifrostContext, config *schemas.Provid
 		if r, bifrostErr = providerUtils.FlattenResponsesNamespaceTools(ctx, r); bifrostErr != nil {
 			return nil, bifrostErr
 		}
+		// Google loads what a client search found from the search's result.
+		if declaresClientToolSearch(r) && schemas.IsGeminiModelFamily(ctx, r.Model) && gemini.ShouldUseGeminiInteractions(ctx, r) {
+			if r, bifrostErr = providerUtils.FlattenLoadedNamespaceTools(ctx, r); bifrostErr != nil {
+				return nil, bifrostErr
+			}
+			r = declareChosenLoadedTools(r)
+		}
 	}
 	r = resolveAdvisorToolAliases(ctx, key, r)
 	// Last, so tools hoisted out of additional_tools items and namespaces are normalized and aliased too.
@@ -9282,6 +9402,59 @@ func toolSchemaPolicy(caps schemas.ModelCaps) providerUtils.ToolSchemaPolicy {
 		DropPattern:        !caps.SupportsSchemaPattern(true),
 		StringFormats:      caps.SupportedSchemaFormats(formats),
 	}
+}
+
+// keyServiceTier returns the service tier the attempt's resolved alias sets, else the key's, or
+// nil. A key with neither a tier nor aliases returns before the context lookup.
+func keyServiceTier(ctx *schemas.BifrostContext, key *schemas.Key) *schemas.BifrostServiceTier {
+	if len(key.Aliases) > 0 {
+		if ra := schemas.GetResolvedAlias(ctx); ra != nil && ra.Config != nil && ra.Config.ServiceTier != nil {
+			return ra.Config.ServiceTier
+		}
+	}
+	return key.ServiceTier
+}
+
+// applyKeyServiceTierChat sets service_tier to the attempt's alias or key tier, overriding the
+// caller's: a tier set on a key or alias is enforced, and the caller's tier passes through only
+// when neither sets one. On a raw-body request the Anthropic and Gemini providers write this tier
+// into the forwarded body. Copy-on-write: the caller's request is never mutated, and a key
+// without a tier, or a request already carrying the same tier, is returned as-is with no allocation.
+func applyKeyServiceTierChat(ctx *schemas.BifrostContext, key *schemas.Key, r *schemas.BifrostChatRequest) *schemas.BifrostChatRequest {
+	if r == nil {
+		return r
+	}
+	tier := keyServiceTier(ctx, key)
+	if tier == nil || (r.Params != nil && r.Params.ServiceTier != nil && *r.Params.ServiceTier == *tier) {
+		return r
+	}
+	var params schemas.ChatParameters
+	if r.Params != nil {
+		params = *r.Params
+	}
+	params.ServiceTier = tier
+	cp := *r
+	cp.Params = &params
+	return &cp
+}
+
+// applyKeyServiceTierResponses is the Responses API parallel of applyKeyServiceTierChat.
+func applyKeyServiceTierResponses(ctx *schemas.BifrostContext, key *schemas.Key, r *schemas.BifrostResponsesRequest) *schemas.BifrostResponsesRequest {
+	if r == nil {
+		return r
+	}
+	tier := keyServiceTier(ctx, key)
+	if tier == nil || (r.Params != nil && r.Params.ServiceTier != nil && *r.Params.ServiceTier == *tier) {
+		return r
+	}
+	var params schemas.ResponsesParameters
+	if r.Params != nil {
+		params = *r.Params
+	}
+	params.ServiceTier = tier
+	cp := *r
+	cp.Params = &params
+	return &cp
 }
 
 // prepareChatRequest is the Chat Completions parallel of prepareResponsesRequest.
@@ -9374,6 +9547,7 @@ func injectedMCPInstructions(ctx *schemas.BifrostContext) *string {
 // turn Bifrost rewrote (injected tools, appended tool results) still echoes what the
 // caller sent.
 func (bifrost *Bifrost) dispatchChat(ctx *schemas.BifrostContext, provider schemas.Provider, config *schemas.ProviderConfig, key schemas.Key, chatRequest, original *schemas.BifrostChatRequest) (*schemas.BifrostChatResponse, *schemas.BifrostError) {
+	chatRequest = applyKeyServiceTierChat(ctx, &key, chatRequest)
 	if bifrostError := routeChatReasoningMode(ctx, provider, chatRequest); bifrostError != nil {
 		return nil, bifrostError
 	}
@@ -9409,6 +9583,7 @@ func (bifrost *Bifrost) dispatchChat(ctx *schemas.BifrostContext, provider schem
 
 // dispatchResponses is the Responses API parallel of dispatchChat.
 func (bifrost *Bifrost) dispatchResponses(ctx *schemas.BifrostContext, provider schemas.Provider, config *schemas.ProviderConfig, key schemas.Key, responsesRequest, original *schemas.BifrostResponsesRequest) (*schemas.BifrostResponsesResponse, *schemas.BifrostError) {
+	responsesRequest = applyKeyServiceTierResponses(ctx, &key, responsesRequest)
 	// Prepared BEFORE the chat-fallback branch: ToChatRequest keeps only function
 	// tools, so a namespace that reached it unflattened would be dropped silently.
 	preparedRequest, bifrostError := prepareResponsesRequest(ctx, config, provider, key, responsesRequest)
@@ -9442,6 +9617,7 @@ func (bifrost *Bifrost) dispatchResponses(ctx *schemas.BifrostContext, provider 
 // dispatchChatStream opens one chat completion stream, converting through the
 // Responses API when the request is marked for it.
 func (bifrost *Bifrost) dispatchChatStream(ctx *schemas.BifrostContext, provider schemas.Provider, config *schemas.ProviderConfig, key schemas.Key, chatRequest *schemas.BifrostChatRequest, postHookRunner schemas.PostHookRunner, postHookSpanFinalizer func(context.Context)) (chan *schemas.BifrostStreamChunk, *schemas.BifrostError) {
+	chatRequest = applyKeyServiceTierChat(ctx, &key, chatRequest)
 	if bifrostError := routeChatReasoningMode(ctx, provider, chatRequest); bifrostError != nil {
 		return nil, bifrostError
 	}
@@ -9463,6 +9639,7 @@ func (bifrost *Bifrost) dispatchChatStream(ctx *schemas.BifrostContext, provider
 // dispatchResponsesStream opens one Responses API stream, converting through chat
 // completions when the request is marked for it.
 func (bifrost *Bifrost) dispatchResponsesStream(ctx *schemas.BifrostContext, provider schemas.Provider, config *schemas.ProviderConfig, key schemas.Key, responsesRequest *schemas.BifrostResponsesRequest, postHookRunner schemas.PostHookRunner, postHookSpanFinalizer func(context.Context)) (chan *schemas.BifrostStreamChunk, *schemas.BifrostError) {
+	responsesRequest = applyKeyServiceTierResponses(ctx, &key, responsesRequest)
 	// Prepared BEFORE the chat-fallback branch: ToChatRequest keeps only function
 	// tools, so a namespace that reached it unflattened would be dropped silently.
 	preparedRequest, bifrostError := prepareResponsesRequest(ctx, config, provider, key, responsesRequest)
@@ -11689,6 +11866,10 @@ func (bifrost *Bifrost) selectKeyFromProviderForModelWithPool(ctx *schemas.Bifro
 		}
 	}
 
+	// A create on a Vertex path naming a location prefers a key for it. A pinned key was already
+	// returned above.
+	supportedKeys = narrowVertexInteractionsKeys(ctx, baseProviderType, requestType, model, supportedKeys)
+
 	// Single key: no rotation possible, so the session cannot choose. It is still asked, so it can
 	// drop a binding to a key that left the pool, except by a realtime pick, which never writes
 	// the session's bindings, and by a pool a second model or the batch and file APIs narrowed,
@@ -11731,6 +11912,41 @@ func (bifrost *Bifrost) selectKeyFromProviderForModelWithPool(ctx *schemas.Bifro
 
 	// Normal case: return the full filtered pool with rotation enabled.
 	return supportedKeys, true, nil
+}
+
+// narrowVertexInteractionsKeys leaves out the Vertex keys that cannot reach a stored interaction: a call on
+// one names no model to choose a key by, only some locations serve Interactions, and Google's 400 for any
+// other would end the search across keys. A create is narrowed only when its path names a location. Every
+// other request gets keys back as they are.
+func narrowVertexInteractionsKeys(ctx *schemas.BifrostContext, baseProvider schemas.ModelProvider, requestType schemas.RequestType, model string, keys []schemas.Key) []schemas.Key {
+	if baseProvider != schemas.Vertex || ctx == nil || len(keys) < 2 {
+		return keys
+	}
+	location, _ := ctx.Value(schemas.BifrostContextKeyInteractionsLocation).(string)
+	if location == "" && !isResponsesLifecycleRequestType(requestType) {
+		return keys
+	}
+	project, _ := ctx.Value(schemas.BifrostContextKeyInteractionsProject).(string)
+	return vertex.InteractionsKeys(keys, model, project, location)
+}
+
+// narrowContinuationKeys keeps the keys that reach the stored turn a Responses request continues, for a
+// provider that keeps one in the place that made it. Every other request gets keys back as they are.
+func narrowContinuationKeys(ctx *schemas.BifrostContext, provider schemas.Provider, req *schemas.BifrostRequest, keys []schemas.Key) ([]schemas.Key, *schemas.BifrostError) {
+	if len(keys) < 2 || req.ResponsesRequest == nil {
+		return keys, nil
+	}
+	params := req.ResponsesRequest.Params
+	if params == nil || params.PreviousResponseID == nil || *params.PreviousResponseID == "" {
+		return keys, nil
+	}
+	placer, ok := provider.(interface {
+		ContinuationKeys(ctx *schemas.BifrostContext, request *schemas.BifrostResponsesRequest, keys []schemas.Key) ([]schemas.Key, *schemas.BifrostError)
+	})
+	if !ok {
+		return keys, nil
+	}
+	return placer.ContinuationKeys(ctx, req.ResponsesRequest, keys)
 }
 
 // keySupportsModel reports whether a key's allow list, deny list and vLLM served model admit model.

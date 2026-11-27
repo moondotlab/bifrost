@@ -1301,18 +1301,18 @@ const SCENARIOS = [
     ],
   },
   {
-    id: "alias-of-allowed-model",
-    title: "Alias of an allowed model resolves",
-    description: "The VK whitelists only the resolved model id and the request uses the alias name; every enabled key maps the alias to that allowed model, so governance accepts it (#8528).",
+    id: "alias-vs-whitelist",
+    title: "Alias of a whitelisted model is admitted",
+    description: "The VK whitelists the resolved model id and the request uses the key's alias for it; since #8528 allowed_models matches key aliases of allowed models, so the alias is served and resolves to the whitelisted id.",
     steps: [
       { type: "addProvider", keys: [key({ id: "k1", models: ["catwiring-alias-{{run_id}}"], aliases: { "catwiring-alias-{{run_id}}": MODEL_B } })] },
       { type: "createVK", providerConfigs: [vkProvider({ allowedModels: [MODEL_B] })] },
-      { type: "route", model: "catwiring-alias-{{run_id}}", expectStatus: 200, expectResolvedModelId: MODEL_B, label: "alias of allowed model routes, resolves to model id" },
+      { type: "route", model: "catwiring-alias-{{run_id}}", expectStatus: 200, expectKeyId: "k1", expectResolvedModelId: MODEL_B, label: "alias of an allowed model routes (resolves to the model id)" },
       { type: "cleanup" },
     ],
   },
   {
-    id: "alias-vs-whitelist",
+    id: "alias-of-unlisted-model",
     title: "Alias of an unlisted model is blocked",
     description: "The VK whitelists a different model than the alias resolves to; neither the alias name nor its target is in allowed_models, so governance refuses it with 403 model_blocked.",
     steps: [
