@@ -2906,6 +2906,10 @@ func histogramDimensionColumn(dimension HistogramDimension) (string, bool) {
 		return "business_unit_id", true
 	case DimensionProject:
 		return "project_id", true
+	case DimensionApp:
+		return "app", true
+	case DimensionUserAgent:
+		return "user_agent", true
 	}
 	return "", false
 }
