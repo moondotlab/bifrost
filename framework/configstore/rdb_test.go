@@ -3222,6 +3222,58 @@ func TestGenerateClientConfigHash_CompatForceReasoningOnlyModelsToResponses(t *t
 	assert.NotEqual(t, onHash, offHash, "toggling force_reasoning_only_models_to_responses must change the hash")
 }
 
+func TestUpdateClientConfig_CompatLearnUnsupportedParamsRoundTrip(t *testing.T) {
+	store := setupRDBTestStore(t)
+	ctx := context.Background()
+
+	base := func(enabled bool) *ClientConfig {
+		return &ClientConfig{
+			EnableLogging:        new(true),
+			InitialPoolSize:      100,
+			LogRetentionDays:     30,
+			MaxRequestBodySizeMB: 50,
+			Compat:               CompatConfig{LearnUnsupportedParams: enabled},
+		}
+	}
+
+	require.NoError(t, store.UpdateClientConfig(ctx, base(false)))
+	result, err := store.GetClientConfig(ctx)
+	require.NoError(t, err)
+	assert.False(t, result.Compat.LearnUnsupportedParams, "disabling the feature must persist")
+
+	require.NoError(t, store.UpdateClientConfig(ctx, base(true)))
+	result, err = store.GetClientConfig(ctx)
+	require.NoError(t, err)
+	assert.True(t, result.Compat.LearnUnsupportedParams, "re-enabling the feature must persist")
+}
+
+func TestGenerateClientConfigHash_CompatLearnUnsupportedParams(t *testing.T) {
+	on := &ClientConfig{InitialPoolSize: 100, Compat: CompatConfig{LearnUnsupportedParams: true}}
+	off := &ClientConfig{InitialPoolSize: 100, Compat: CompatConfig{LearnUnsupportedParams: false}}
+	onHash, err := on.GenerateClientConfigHash()
+	require.NoError(t, err)
+	offHash, err := off.GenerateClientConfigHash()
+	require.NoError(t, err)
+	assert.NotEqual(t, onHash, offHash, "toggling learn_unsupported_params must change the hash")
+}
+
+// TestClientConfigUnmarshal_CompatLearnUnsupportedParamsDefaultsOn pins that the
+// feature stays on when config.json omits it, unlike the opt-in decision toggle.
+func TestClientConfigUnmarshal_CompatLearnUnsupportedParamsDefaultsOn(t *testing.T) {
+	for name, raw := range map[string]string{
+		"compat absent":      `{}`,
+		"field absent":       `{"compat": {"convert_text_to_chat": true}}`,
+		"explicitly enabled": `{"compat": {"learn_unsupported_params": true}}`,
+		"explicitly disabled": `{"compat": {"learn_unsupported_params": false}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			var c ClientConfig
+			require.NoError(t, json.Unmarshal([]byte(raw), &c))
+			assert.Equal(t, name != "explicitly disabled", c.Compat.LearnUnsupportedParams)
+		})
+	}
+}
+
 func TestGenerateClientConfigHash_VKRotationCooldown(t *testing.T) {
 	base := &ClientConfig{InitialPoolSize: 100, LogRetentionDays: 30}
 	baseHash, err := base.GenerateClientConfigHash()

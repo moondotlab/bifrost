@@ -344,6 +344,7 @@ func (s *BifrostHTTPServer) loadBuiltinPlugins(ctx context.Context) error {
 		AzureDeepseek:                       cc.AzureDeepseek,
 		ForceReasoningOnlyModelsToResponses: cc.ForceReasoningOnlyModelsToResponses,
 		ConvertDecisionToResponses:          cc.ConvertDecisionToResponses,
+		LearnUnsupportedParams:              cc.LearnUnsupportedParams,
 	}
 	s.registerPluginWithStatus(ctx, compat.PluginName, nil, compatCfg, false)
 	s.Config.SetPluginOrderInfo(compat.PluginName, builtinPlacement, schemas.Ptr(8))

@@ -339,7 +339,9 @@
 		"forceReasoningOnlyToResponses": "Utiliser l’API Responses pour les modèles OpenAI à raisonnement uniquement",
 		"forceReasoningOnlyToResponsesHelp": "Achemine les requêtes de chat completion vers l’API Responses pour les modèles qui ne peuvent pas raisonner avec des appels d’outils sur les chat completions, au lieu de désactiver le raisonnement.",
 		"convertDecisionToResponses": "Émuler l’API Decisions sur les modèles sans décision",
-		"convertDecisionToResponsesHelp": "Répond aux requêtes de décision pour les modèles sans point de terminaison de décisions natif, en sollicitant le modèle via l’API Responses avec un outil de fonction forcé. Lorsque cette option est désactivée, ces requêtes échouent comme non prises en charge."
+		"convertDecisionToResponsesHelp": "Répond aux requêtes de décision pour les modèles sans point de terminaison de décisions natif, en sollicitant le modèle via l’API Responses avec un outil de fonction forcé. Lorsque cette option est désactivée, ces requêtes échouent comme non prises en charge.",
+		"learnUnsupportedParams": "Apprendre les paramètres non pris en charge",
+		"learnUnsupportedParamsHelp": "Lorsqu'un upstream rejette un champ que le catalogue du modèle prétend prendre en charge, la même paire fournisseur/modèle est réessayée une fois sans ce champ, puis il n'est plus envoyé. Corrige les fournisseurs-revendeurs dont les upstreams sont en retard sur les capacités du catalogue."
 	},
 	"featureFlags": {
 		"title": "Indicateurs de fonctionnalités",

@@ -339,7 +339,9 @@
 		"forceReasoningOnlyToResponses": "추론 전용 OpenAI 모델에 Responses API 사용",
 		"forceReasoningOnlyToResponsesHelp": "채팅 완성에서 도구 호출과 함께 추론할 수 없는 모델의 경우, 추론을 끄는 대신 채팅 완성 요청을 Responses API로 라우팅해요.",
 		"convertDecisionToResponses": "결정 모델이 아닌 모델에서 Decisions API 에뮬레이션",
-		"convertDecisionToResponsesHelp": "네이티브 decisions 엔드포인트가 없는 모델의 결정 요청에, 강제 함수 도구와 함께 Responses API로 모델에 프롬프트를 보내 응답해요. 끄면 해당 요청은 지원되지 않아 실패해요."
+		"convertDecisionToResponsesHelp": "네이티브 decisions 엔드포인트가 없는 모델의 결정 요청에, 강제 함수 도구와 함께 Responses API로 모델에 프롬프트를 보내 응답해요. 끄면 해당 요청은 지원되지 않아 실패해요.",
+		"learnUnsupportedParams": "지원되지 않는 파라미터 학습",
+		"learnUnsupportedParamsHelp": "업스트림이 모델 카탈로그에서 지원된다고 표시된 필드를 거부하면 동일한 프로바이더/모델을 해당 필드 없이 한 번 재시도하고 이후 요청에서는 보내지 않습니다. 카탈로그의 기능 정보보다 뒤처진 리셀러 프로바이더를 자동으로 복구합니다."
 	},
 	"featureFlags": {
 		"title": "기능 플래그",

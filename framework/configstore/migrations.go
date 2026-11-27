@@ -616,6 +616,8 @@ var configstoreMigrationSteps = []migrationStep{
 	{IDs: []string{"add_notification_subject_resolution_columns"}, run: migrationAddNotificationSubjectResolutionColumns},
 	{IDs: []string{"add_notification_subject_index"}, run: migrationAddNotificationSubjectIndex},
 	{IDs: []string{"add_virtual_mcp_config_issues_column"}, run: migrationAddVirtualMCPConfigIssuesColumn},
+	{IDs: []string{"add_compat_learn_unsupported_params_column"}, run: migrationAddCompatLearnUnsupportedParamsColumn},
+	{IDs: []string{"backfill_compat_learn_unsupported_params"}, run: migrationBackfillCompatLearnUnsupportedParams},
 }
 
 // warpLogEmbeddingColumns are the semantic-search configuration columns added
@@ -16462,6 +16464,61 @@ func migrationAddCompatConvertDecisionToResponsesColumn(ctx context.Context, db 
 			if err := dropColumnIfExists(tx, logger, &tables.TableClientConfig{}, "compat_convert_decision_to_responses"); err != nil {
 				return fmt.Errorf("failed to drop compat_convert_decision_to_responses column: %w", err)
 			}
+			return nil
+		},
+	}})
+	if err := m.Migrate(); err != nil {
+		return fmt.Errorf("error running %s migration: %s", migrationName, err.Error())
+	}
+	return nil
+}
+
+// migrationAddCompatLearnUnsupportedParamsColumn adds compat_learn_unsupported_params
+// to config_client.
+func migrationAddCompatLearnUnsupportedParamsColumn(ctx context.Context, db *gorm.DB, logger schemas.Logger) error {
+	migrationName := "add_compat_learn_unsupported_params_column"
+	logger.Info("[configstore] starting migration %s", migrationName)
+	defer logger.Info("[configstore] finished migration %s", migrationName)
+	m := migrator.New(db, migrator.DefaultOptions, []*migrator.Migration{{
+		ID: migrationName,
+		Migrate: func(tx *gorm.DB) error {
+			tx = tx.WithContext(ctx)
+			if err := addColumnIfNotExists(tx, logger, &tables.TableClientConfig{}, "CompatLearnUnsupportedParams"); err != nil {
+				return fmt.Errorf("failed to add compat_learn_unsupported_params column: %w", err)
+			}
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			tx = tx.WithContext(ctx)
+			if err := dropColumnIfExists(tx, logger, &tables.TableClientConfig{}, "compat_learn_unsupported_params"); err != nil {
+				return fmt.Errorf("failed to drop compat_learn_unsupported_params column: %w", err)
+			}
+			return nil
+		},
+	}})
+	if err := m.Migrate(); err != nil {
+		return fmt.Errorf("error running %s migration: %s", migrationName, err.Error())
+	}
+	return nil
+}
+
+// migrationBackfillCompatLearnUnsupportedParams sets compat_learn_unsupported_params
+// TRUE on existing config_client rows so the feature is on for existing deployments.
+func migrationBackfillCompatLearnUnsupportedParams(ctx context.Context, db *gorm.DB, logger schemas.Logger) error {
+	migrationName := "backfill_compat_learn_unsupported_params"
+	logger.Info("[configstore] starting migration %s", migrationName)
+	defer logger.Info("[configstore] finished migration %s", migrationName)
+	m := migrator.New(db, migrator.DefaultOptions, []*migrator.Migration{{
+		ID: migrationName,
+		Migrate: func(tx *gorm.DB) error {
+			tx = tx.WithContext(ctx)
+			if err := tx.Exec("UPDATE config_client SET compat_learn_unsupported_params = TRUE").Error; err != nil {
+				return fmt.Errorf("failed to backfill compat_learn_unsupported_params: %w", err)
+			}
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			// Forward-only: the backfilled values are not reverted; rolling back the column migration drops them.
 			return nil
 		},
 	}})

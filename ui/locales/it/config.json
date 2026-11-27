@@ -339,7 +339,9 @@
 		"forceReasoningOnlyToResponses": "Usa Responses API per i modelli OpenAI solo di reasoning",
 		"forceReasoningOnlyToResponsesHelp": "Instrada le richieste di completamento chat alla Responses API per i modelli che non supportano il reasoning con chiamate agli strumenti nei completamenti chat, invece di disattivare il reasoning.",
 		"convertDecisionToResponses": "Emula Decisions API sui modelli senza supporto decisionale",
-		"convertDecisionToResponsesHelp": "Rispondi alle richieste decision tramite Responses API con uno strumento funzione forzato, per i modelli senza endpoint decision nativo. Se disattivato, queste richieste restituiscono un errore di operazione non supportata."
+		"convertDecisionToResponsesHelp": "Rispondi alle richieste decision tramite Responses API con uno strumento funzione forzato, per i modelli senza endpoint decision nativo. Se disattivato, queste richieste restituiscono un errore di operazione non supportata.",
+		"learnUnsupportedParams": "Apprendi parametri non supportati",
+		"learnUnsupportedParamsHelp": "Quando un upstream rifiuta un campo che il catalogo del modello dichiara supportato, la stessa coppia provider/modello viene ritentata una volta senza il campo e non viene più inviato nelle richieste successive. Risolve i provider rivenditori i cui upstream sono indietro rispetto alle capacità del catalogo."
 	},
 	"featureFlags": {
 		"title": "Feature flag",

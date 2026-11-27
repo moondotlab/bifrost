@@ -339,7 +339,9 @@
 		"forceReasoningOnlyToResponses": "Responses API für reine Reasoning-Modelle von OpenAI verwenden",
 		"forceReasoningOnlyToResponsesHelp": "Leitet Chat-Completion-Anfragen an die Responses API weiter, wenn Modelle bei Chat Completions nicht mit Tool-Aufrufen schlussfolgern können, statt das Reasoning auszuschalten.",
 		"convertDecisionToResponses": "Decisions API für Nicht-Entscheidungsmodelle emulieren",
-		"convertDecisionToResponsesHelp": "Beantwortet Decision-Anfragen für Modelle ohne nativen Decisions-Endpunkt, indem das Modell über die Responses API mit einem erzwungenen Function-Tool angesprochen wird. Wenn deaktiviert, schlagen diese Anfragen als nicht unterstützt fehl."
+		"convertDecisionToResponsesHelp": "Beantwortet Decision-Anfragen für Modelle ohne nativen Decisions-Endpunkt, indem das Modell über die Responses API mit einem erzwungenen Function-Tool angesprochen wird. Wenn deaktiviert, schlagen diese Anfragen als nicht unterstützt fehl.",
+		"learnUnsupportedParams": "Nicht unterstützte Parameter erlernen",
+		"learnUnsupportedParamsHelp": "Wenn ein Upstream ein vom Modellkatalog als unterstützt geltendes Feld ablehnt, wird derselbe Provider/dasselbe Modell einmal ohne das Feld wiederholt und das Feld danach nicht mehr gesendet. Heilt Reseller-Provider, deren Upstreams den Capability-Angaben des Katalogs hinterherhinken."
 	},
 	"featureFlags": {
 		"title": "Feature-Flags",

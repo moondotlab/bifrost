@@ -28,6 +28,7 @@ export const DefaultCoreConfig: CoreConfig = {
 		azure_deepseek: false,
 		force_reasoning_only_models_to_responses: true,
 		convert_decision_to_responses: false,
+		learn_unsupported_params: true,
 	},
 	mcp_agent_depth: 10,
 	mcp_tool_execution_timeout: 30,

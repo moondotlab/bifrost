@@ -339,7 +339,9 @@
 		"forceReasoningOnlyToResponses": "Use Responses API for reasoning only OpenAI models",
 		"forceReasoningOnlyToResponsesHelp": "Route chat completion requests to the Responses API for models that cannot reason with tool calls on chat completions, instead of turning reasoning off.",
 		"convertDecisionToResponses": "Emulate Decisions API on non-decision models",
-		"convertDecisionToResponsesHelp": "Answer decision requests for models without a native decisions endpoint by prompting the model through the Responses API with a forced function tool. When off, those requests fail as unsupported."
+		"convertDecisionToResponsesHelp": "Answer decision requests for models without a native decisions endpoint by prompting the model through the Responses API with a forced function tool. When off, those requests fail as unsupported.",
+		"learnUnsupportedParams": "Learn Unsupported Params",
+		"learnUnsupportedParamsHelp": "When an upstream rejects a request field the model catalog believes in, retry the same provider/model once without it and stop sending it on later requests. Heals reseller providers whose upstreams lag the catalog's capability claims."
 	},
 	"featureFlags": {
 		"title": "Feature Flags",

@@ -6051,6 +6051,66 @@ func (bifrost *Bifrost) prepareFallbackRequest(req *schemas.BifrostRequest, fall
 	return &fallbackReq
 }
 
+// learnParamRejection records an upstream "param not supported" rejection into
+// the learned-compat registry and reports whether the learned set for the
+// attempt's (provider, model) changed. A change means an immediate same-pair
+// retry goes out differently — the attempt's PreLLMHook strips what was just
+// learned — so the caller retries the pair instead of falling back. An
+// unchanged set means the attempt already ran with everything known stripped,
+// so a retry would resend the identical request and fail the same way.
+//
+// The rejection is learned under every name the pair goes by: RoutingInfo.Model
+// is the request's model field as the attempt's PreLLMHook saw it (what fresh
+// requests look up), while ResolvedModelUsed is the post-alias wire model —
+// and req.SetModel mutates the shared request to that wire model, so the
+// same-request retry's PreLLMHook looks it up under the resolved name. Learning
+// both keeps the strip effective for alias users on this retry and on every
+// later request. attemptProvider/attemptModel are the caller's fallback when
+// the error carries no routing info (it failed before an attempt was built).
+func learnParamRejection(ctx *schemas.BifrostContext, bifrostErr *schemas.BifrostError, attemptProvider schemas.ModelProvider, attemptModel string) bool {
+	if bifrostErr == nil {
+		return false
+	}
+	// Only learn when the compat pipeline advertised that it will strip learned
+	// params: without it the retry would resend the identical request and fail
+	// the same way, and the registry entry would be write-only noise.
+	if enabled, _ := ctx.Value(schemas.BifrostContextKeyCompatLearnUnsupportedParams).(bool); !enabled {
+		return false
+	}
+	param := schemas.UnsupportedParamFromError(bifrostErr)
+	if param == "" {
+		return false
+	}
+	provider := bifrostErr.ExtraFields.RoutingInfo.Provider
+	if provider == "" {
+		provider = attemptProvider
+	}
+	if provider == "" {
+		return false
+	}
+	models := make([]string, 0, 2)
+	if m := bifrostErr.ExtraFields.RoutingInfo.Model; m != "" {
+		models = append(models, m)
+	}
+	if m := bifrostErr.ExtraFields.ResolvedModelUsed; m != "" && !slices.Contains(models, m) {
+		models = append(models, m)
+	}
+	if len(models) == 0 && attemptModel != "" {
+		models = append(models, attemptModel)
+	}
+	changed := false
+	for _, model := range models {
+		changed = schemas.LearnUnsupportedParam(provider, model, param) || changed
+	}
+	return changed
+}
+
+// maxParamRejectionRetries bounds the learn-and-retry loop: each iteration only
+// fires when the upstream named a param nobody had learned yet, so the loop
+// ends on its own — the cap exists for a pathological upstream that keeps
+// naming new fields, where falling back beats paying round trips forever.
+const maxParamRejectionRetries = 3
+
 // shouldContinueWithFallbacks processes errors from fallback attempts
 // Returns true if we should continue with more fallbacks, false if we should stop
 func (bifrost *Bifrost) shouldContinueWithFallbacks(fallback schemas.Fallback, fallbackErr *schemas.BifrostError) bool {
@@ -6195,6 +6255,14 @@ func (bifrost *Bifrost) handleRequest(ctx *schemas.BifrostContext, req *schemas.
 		if len(fallbacks) > 0 {
 			bifrost.logger.Debug("check if we should try %d fallbacks", len(fallbacks))
 		}
+		// A param rejection the compat layer just learned strips on the next
+		// attempt's PreLLMHook, so the same pair retries — once per newly
+		// learned param — before fallbacks.
+		for i := 0; i < maxParamRejectionRetries && learnParamRejection(ctx, primaryErr, provider, model); i++ {
+			ctx.AppendRoutingEngineLog(schemas.RoutingEngineCore, schemas.LogLevelInfo, fmt.Sprintf("Primary %s/%s rejected a request param; retrying without it", provider, model))
+			primaryResult, primaryErr = bifrost.tryRequest(ctx, req)
+			primaryHeaders, _ = ctx.Value(schemas.BifrostContextKeyProviderResponseHeaders).(map[string]string)
+		}
 	}
 
 	// Check if we should proceed with fallbacks
@@ -6253,6 +6321,13 @@ func (bifrost *Bifrost) handleRequest(ctx *schemas.BifrostContext, req *schemas.
 
 		// Try the fallback provider
 		result, fallbackErr := bifrost.tryRequest(ctx, fallbackReq)
+		// A param rejection the compat layer just learned strips on the next
+		// attempt's PreLLMHook, so the same pair retries — once per newly
+		// learned param — before moving on.
+		for retry := 0; retry < maxParamRejectionRetries && fallbackErr != nil && learnParamRejection(ctx, fallbackErr, fallback.Provider, fallback.Model); retry++ {
+			ctx.AppendRoutingEngineLog(schemas.RoutingEngineCore, schemas.LogLevelInfo, fmt.Sprintf("Fallback %s/%s rejected a request param; retrying without it", fallback.Provider, fallback.Model))
+			result, fallbackErr = bifrost.tryRequest(ctx, fallbackReq)
+		}
 		// Layer on Primary/IsFallback — the per-attempt code populates only
 		// attempt-level RoutingInfo (Provider/Model/Key/ResolvedKeyAlias);
 		// fallback-relative signals belong to the orchestrator scope.
@@ -6427,6 +6502,14 @@ func (bifrost *Bifrost) handleStreamRequest(ctx *schemas.BifrostContext, req *sc
 		if len(fallbacks) > 0 {
 			bifrost.logger.Debug("check if we should try %d fallbacks", len(fallbacks))
 		}
+		// A param rejection the compat layer just learned strips on the next
+		// attempt's PreLLMHook, so the same pair retries — once per newly
+		// learned param — before fallbacks.
+		for i := 0; i < maxParamRejectionRetries && learnParamRejection(ctx, primaryErr, provider, model); i++ {
+			ctx.AppendRoutingEngineLog(schemas.RoutingEngineCore, schemas.LogLevelInfo, fmt.Sprintf("Primary %s/%s rejected a request param; retrying without it", provider, model))
+			primaryResult, primaryErr = bifrost.tryStreamRequest(ctx, req, attemptFirstTokenTimeout(len(fallbacks) > 0))
+			primaryHeaders, _ = ctx.Value(schemas.BifrostContextKeyProviderResponseHeaders).(map[string]string)
+		}
 	}
 
 	// Check if we should proceed with fallbacks
@@ -6480,6 +6563,13 @@ func (bifrost *Bifrost) handleStreamRequest(ctx *schemas.BifrostContext, req *sc
 
 		// Try the fallback provider
 		result, fallbackErr := bifrost.tryStreamRequest(ctx, fallbackReq, attemptFirstTokenTimeout(i < len(fallbacks)-1))
+		// A param rejection the compat layer just learned strips on the next
+		// attempt's PreLLMHook, so the same pair retries — once per newly
+		// learned param — before moving on.
+		for retry := 0; retry < maxParamRejectionRetries && fallbackErr != nil && learnParamRejection(ctx, fallbackErr, fallback.Provider, fallback.Model); retry++ {
+			ctx.AppendRoutingEngineLog(schemas.RoutingEngineCore, schemas.LogLevelInfo, fmt.Sprintf("Fallback %s/%s rejected a request param; retrying without it", fallback.Provider, fallback.Model))
+			result, fallbackErr = bifrost.tryStreamRequest(ctx, fallbackReq, attemptFirstTokenTimeout(i < len(fallbacks)-1))
+		}
 		// Layer on Primary/IsFallback on errors. For the success case the
 		// result is a chan of stream chunks emitted asynchronously — those
 		// chunks already carry per-attempt RoutingInfo populated upstream,

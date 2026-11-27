@@ -906,7 +906,7 @@ var DefaultClientConfig = configstore.ClientConfig{
 	DeleteExpiredVirtualKeys:        false,
 	EnforceVKObjectOwnership:        true,
 	RoutingChainMaxDepth:            rules.DefaultChainMaxDepth,
-	Compat:                          configstore.CompatConfig{ForceReasoningOnlyModelsToResponses: true},
+	Compat: configstore.CompatConfig{ForceReasoningOnlyModelsToResponses: true, LearnUnsupportedParams: true},
 }
 
 // applyV1Compat normalizes ConfigData to restore v1.4.x allow-list semantics.

@@ -25,6 +25,7 @@ type Config struct {
 	AzureDeepseek                       bool `json:"azure_deepseek"`
 	ForceReasoningOnlyModelsToResponses bool `json:"force_reasoning_only_models_to_responses"`
 	ConvertDecisionToResponses          bool `json:"convert_decision_to_responses"`
+	LearnUnsupportedParams              bool `json:"learn_unsupported_params"`
 }
 
 // UnmarshalJSON defaults all bool fields to true when absent from JSON, except
@@ -38,6 +39,7 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 		AzureDeepseek                       *bool `json:"azure_deepseek"`
 		ForceReasoningOnlyModelsToResponses *bool `json:"force_reasoning_only_models_to_responses"`
 		ConvertDecisionToResponses          *bool `json:"convert_decision_to_responses"`
+		LearnUnsupportedParams              *bool `json:"learn_unsupported_params"`
 	}
 	var s config
 	if err := sonic.Unmarshal(data, &s); err != nil {
@@ -50,12 +52,13 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 	c.AzureDeepseek = s.AzureDeepseek == nil || *s.AzureDeepseek
 	c.ForceReasoningOnlyModelsToResponses = s.ForceReasoningOnlyModelsToResponses == nil || *s.ForceReasoningOnlyModelsToResponses
 	c.ConvertDecisionToResponses = s.ConvertDecisionToResponses != nil && *s.ConvertDecisionToResponses
+	c.LearnUnsupportedParams = s.LearnUnsupportedParams == nil || *s.LearnUnsupportedParams
 	return nil
 }
 
 // IsEnabled returns true if any compat feature is enabled
 func (c Config) IsEnabled() bool {
-	return c.ConvertTextToChat || c.ConvertChatToResponses || c.ShouldDropParams || c.ShouldConvertParams || c.AzureDeepseek || c.ForceReasoningOnlyModelsToResponses || c.ConvertDecisionToResponses
+	return c.ConvertTextToChat || c.ConvertChatToResponses || c.ShouldDropParams || c.ShouldConvertParams || c.AzureDeepseek || c.ForceReasoningOnlyModelsToResponses || c.ConvertDecisionToResponses || c.LearnUnsupportedParams
 }
 
 // CompatPlugin provides LiteLLM-compatible request/response transformations.
@@ -141,8 +144,23 @@ func (p *CompatPlugin) PreLLMHook(ctx *schemas.BifrostContext, req *schemas.Bifr
 	reasoningOnlyOverride, reasoningOnlyOverrideEnabled := ctx.Value(schemas.BifrostContextKeyCompatForceReasoningOnlyToResponses).(bool)
 	decisionToResponsesOverride, decisionToResponsesOverrideEnabled := ctx.Value(schemas.BifrostContextKeyCompatConvertDecisionToResponses).(bool)
 
+	// Params this (provider, model) pair already proved the upstream rejects are
+	// applied below regardless of what the catalog claims: the catalog describes
+	// what should work, the learned set describes what does. Core's attempt
+	// loop learns the set from upstream errors (schemas.LearnUnsupportedParam)
+	// and retries the pair once; this hook is what makes that retry — and every
+	// later attempt — actually go out without the field.
+	var learned schemas.LearnedUnsupportedSet
+	if p.config.LearnUnsupportedParams {
+		// Advertise to core's attempt loop that this pipeline will strip learned
+		// rejections, so a param-rejection error earns the same pair one retry.
+		ctx.SetValue(schemas.BifrostContextKeyCompatLearnUnsupportedParams, true)
+		provider, model, _ := req.GetRequestFields()
+		learned = schemas.LearnedUnsupportedFor(provider, model)
+	}
+
 	modifiedReq := req
-	if (shouldDropParamsOverrideEnabled && shouldDropParamsOverride) || (shouldConvertParamsOverrideEnabled && shouldConvertParamsOverride) || p.config.ShouldConvertParams || p.config.ShouldDropParams {
+	if (shouldDropParamsOverrideEnabled && shouldDropParamsOverride) || (shouldConvertParamsOverrideEnabled && shouldConvertParamsOverride) || p.config.ShouldConvertParams || p.config.ShouldDropParams || learned.HasWork() {
 		modifiedReq = cloneBifrostReq(req)
 	}
 
@@ -222,6 +240,34 @@ func (p *CompatPlugin) PreLLMHook(ctx *schemas.BifrostContext, req *schemas.Bifr
 				ctx.Log(schemas.LogLevelWarn, fmt.Sprintf("converted %d param value(s) for model %s: %s", len(changes), model, strings.Join(changes, ", ")))
 			} else {
 				ctx.Log(schemas.LogLevelDebug, fmt.Sprintf("no param values converted for model %s (%s)", model, provider))
+			}
+		}
+	}
+
+	// Learned-unsupported params run after the catalog-driven passes so a param
+	// the catalog calls supported but the upstream rejected still goes out
+	// without it. Fallback attempts re-run this hook against their own
+	// (provider, model), so each attempt only sheds what its target rejected.
+	if learned.HasWork() {
+		provider, model, _ := modifiedReq.GetRequestFields()
+		if learned.StripCacheMarkers && stripRequestCacheMarkers(modifiedReq) {
+			msg := fmt.Sprintf("stripped prompt-cache markers for model %s (%s): upstream rejected prompt_cache_breakpoint", model, provider)
+			p.logger.Warn("compat: " + msg)
+			ctx.Log(schemas.LogLevelWarn, msg)
+		}
+		if len(learned.Params) > 0 {
+			droppedParams := dropLearnedParams(ctx, modifiedReq, learned.Params)
+			if len(droppedParams) > 0 {
+				previous, _ := ctx.Value(schemas.BifrostContextKeyCompatDroppedParams).([]string)
+				merged := slices.Clone(previous)
+				for _, d := range droppedParams {
+					if !slices.Contains(merged, d) {
+						merged = append(merged, d)
+					}
+				}
+				ctx.SetValue(schemas.BifrostContextKeyCompatDroppedParams, merged)
+				p.logger.Warn("compat: dropped learned-unsupported params for model %s: %v", model, droppedParams)
+				ctx.Log(schemas.LogLevelWarn, fmt.Sprintf("dropped %d learned-unsupported param(s) for model %s: %s", len(droppedParams), model, strings.Join(droppedParams, ", ")))
 			}
 		}
 	}

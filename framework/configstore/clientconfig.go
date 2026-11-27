@@ -64,6 +64,7 @@ type CompatConfig struct {
 	AzureDeepseek                       bool `json:"azure_deepseek"`
 	ForceReasoningOnlyModelsToResponses bool `json:"force_reasoning_only_models_to_responses"`
 	ConvertDecisionToResponses          bool `json:"convert_decision_to_responses"`
+	LearnUnsupportedParams              bool `json:"learn_unsupported_params"`
 }
 
 // UnmarshalJSON defaults all bool fields to true when absent from JSON, except
@@ -77,6 +78,7 @@ func (c *CompatConfig) UnmarshalJSON(data []byte) error {
 		AzureDeepseek                       *bool `json:"azure_deepseek"`
 		ForceReasoningOnlyModelsToResponses *bool `json:"force_reasoning_only_models_to_responses"`
 		ConvertDecisionToResponses          *bool `json:"convert_decision_to_responses"`
+		LearnUnsupportedParams              *bool `json:"learn_unsupported_params"`
 	}
 	var s compatConfig
 	if err := sonic.Unmarshal(data, &s); err != nil {
@@ -89,6 +91,7 @@ func (c *CompatConfig) UnmarshalJSON(data []byte) error {
 	c.AzureDeepseek = s.AzureDeepseek == nil || *s.AzureDeepseek
 	c.ForceReasoningOnlyModelsToResponses = s.ForceReasoningOnlyModelsToResponses == nil || *s.ForceReasoningOnlyModelsToResponses
 	c.ConvertDecisionToResponses = s.ConvertDecisionToResponses != nil && *s.ConvertDecisionToResponses
+	c.LearnUnsupportedParams = s.LearnUnsupportedParams == nil || *s.LearnUnsupportedParams
 	return nil
 }
 
@@ -180,6 +183,7 @@ func (c *ClientConfig) UnmarshalJSON(data []byte) error {
 			ShouldConvertParams:                 true,
 			AzureDeepseek:                       true,
 			ForceReasoningOnlyModelsToResponses: true,
+			LearnUnsupportedParams:              true,
 		},
 	}
 	input := struct {
@@ -266,6 +270,11 @@ func (c *ClientConfig) GenerateClientConfigHash() (string, error) {
 	}
 	if c.Compat.ConvertDecisionToResponses {
 		hash.Write([]byte("compatConvertDecisionToResponses:true"))
+	}
+	// Default-on like force_reasoning_only_models_to_responses: only the
+	// opt-out is hashed so configs written before the field existed keep their hash.
+	if !c.Compat.LearnUnsupportedParams {
+		hash.Write([]byte("compatLearnUnsupportedParams:false"))
 	}
 
 	// Only hash non-default value to avoid legacy config hash churn.

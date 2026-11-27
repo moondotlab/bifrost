@@ -339,7 +339,9 @@
 		"forceReasoningOnlyToResponses": "Usar la API Responses para modelos de OpenAI solo de razonamiento",
 		"forceReasoningOnlyToResponsesHelp": "Enruta las solicitudes de chat completion a la API Responses para los modelos que no pueden razonar con llamadas a herramientas en chat completions, en lugar de desactivar el razonamiento.",
 		"convertDecisionToResponses": "Emular la API Decisions en modelos sin soporte de decisiones",
-		"convertDecisionToResponsesHelp": "Responde a las solicitudes de decisión para modelos sin un endpoint de decisiones nativo, enviando un prompt al modelo mediante la API Responses con una herramienta de función forzada. Si está desactivado, esas solicitudes fallan por no ser compatibles."
+		"convertDecisionToResponsesHelp": "Responde a las solicitudes de decisión para modelos sin un endpoint de decisiones nativo, enviando un prompt al modelo mediante la API Responses con una herramienta de función forzada. Si está desactivado, esas solicitudes fallan por no ser compatibles.",
+		"learnUnsupportedParams": "Aprender parámetros no admitidos",
+		"learnUnsupportedParamsHelp": "Cuando un upstream rechaza un campo que el catálogo del modelo da por admitido, reintenta el mismo proveedor/modelo una vez sin él y deja de enviarlo en solicitudes posteriores. Repara proveedores revendedores cuyos upstreams van por detrás de las capacidades del catálogo."
 	},
 	"featureFlags": {
 		"title": "Banderas de alimentación",

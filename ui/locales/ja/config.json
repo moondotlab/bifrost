@@ -339,7 +339,9 @@
 		"forceReasoningOnlyToResponses": "推論専用の OpenAI モデルで Responses API を使用",
 		"forceReasoningOnlyToResponsesHelp": "Chat Completions でツール呼び出しと併せて推論できないモデルに対し、推論をオフにする代わりに、チャット補完リクエストを Responses API にルーティングします。",
 		"convertDecisionToResponses": "判断モデルでないモデルで Decisions API をエミュレート",
-		"convertDecisionToResponsesHelp": "ネイティブの decisions エンドポイントを持たないモデルへの判断リクエストに対し、強制された関数ツールを使って Responses API 経由でモデルにプロンプトを送り応答します。オフの場合、これらのリクエストは未対応として失敗します。"
+		"convertDecisionToResponsesHelp": "ネイティブの decisions エンドポイントを持たないモデルへの判断リクエストに対し、強制された関数ツールを使って Responses API 経由でモデルにプロンプトを送り応答します。オフの場合、これらのリクエストは未対応として失敗します。",
+		"learnUnsupportedParams": "未対応パラメータを学習",
+		"learnUnsupportedParamsHelp": "アップストリームがモデルカタログ上は対応しているはずのフィールドを拒否した場合、同じプロバイダー/モデルでそのフィールドを外して一度だけ再試行し、以降のリクエストでは送信しません。カタログの能力情報に追いついていないリセラー系プロバイダーを自己修復します。"
 	},
 	"featureFlags": {
 		"title": "フィーチャーフラグ",

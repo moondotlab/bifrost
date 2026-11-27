@@ -339,7 +339,9 @@
 		"forceReasoningOnlyToResponses": "对仅支持推理的 OpenAI 模型使用 Responses API",
 		"forceReasoningOnlyToResponsesHelp": "对于无法在 chat completions 上结合工具调用进行推理的模型，将聊天补全请求路由到 Responses API，而不是关闭推理。",
 		"convertDecisionToResponses": "在非决策模型上模拟 Decisions API",
-		"convertDecisionToResponsesHelp": "对于没有原生决策端点的模型，通过 Responses API 并强制使用函数工具来提示模型，以响应决策请求。关闭后，这些请求将因不受支持而失败。"
+		"convertDecisionToResponsesHelp": "对于没有原生决策端点的模型，通过 Responses API 并强制使用函数工具来提示模型，以响应决策请求。关闭后，这些请求将因不受支持而失败。",
+		"learnUnsupportedParams": "学习不支持的参数",
+		"learnUnsupportedParamsHelp": "当上游拒绝模型目录声称支持的请求字段时，同一提供商/模型会去掉该字段重试一次，之后的请求也不再发送它。可自愈上游能力落后于目录声明的转售提供商。"
 	},
 	"featureFlags": {
 		"title": "功能开关",

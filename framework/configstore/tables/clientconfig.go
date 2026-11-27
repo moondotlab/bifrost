@@ -108,6 +108,7 @@ type TableClientConfig struct {
 	CompatAzureDeepseek                       bool `gorm:"column:compat_azure_deepseek;default:false" json:"-"`
 	CompatForceReasoningOnlyModelsToResponses bool `gorm:"column:compat_force_reasoning_only_models_to_responses;default:false" json:"-"`
 	CompatConvertDecisionToResponses          bool `gorm:"column:compat_convert_decision_to_responses;default:false" json:"-"`
+	CompatLearnUnsupportedParams              bool `gorm:"column:compat_learn_unsupported_params;default:false" json:"-"`
 
 	// MCPOpenAPIMaxSpecMB limits an openapi MCP client's spec, in MiB; 0 is the built-in 32.
 	// The explicit column name avoids GORM deriving "mcp_open_api_..." from the field name.

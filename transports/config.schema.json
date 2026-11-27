@@ -269,6 +269,11 @@
               "type": "boolean",
               "description": "Emulate decision requests through the model's Responses API (a forced function tool) when the provider does not serve the model on a native decisions endpoint. Off by default: without it, such requests fail with unsupported_operation.",
               "default": false
+            },
+            "learn_unsupported_params": {
+              "type": "boolean",
+              "description": "Learn from upstream 'parameter not supported' rejections: record the field against the provider/model pair, retry the same pair once without it within the request, and strip it from later requests. Heals reseller providers whose upstreams lag the model catalog's capability claims.",
+              "default": true
             }
           },
           "additionalProperties": false

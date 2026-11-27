@@ -339,7 +339,9 @@
 		"forceReasoningOnlyToResponses": "Usar a API Responses para modelos OpenAI apenas de raciocínio",
 		"forceReasoningOnlyToResponsesHelp": "Encaminha os pedidos de chat completion para a API Responses nos modelos que não conseguem raciocinar com chamadas de ferramentas em chat completions, em vez de desativar o raciocínio.",
 		"convertDecisionToResponses": "Emular a Decisions API em modelos sem suporte nativo a decisões",
-		"convertDecisionToResponsesHelp": "Responde a pedidos de decisão em modelos sem endpoint nativo de decisões, invocando o modelo através da API Responses com uma ferramenta de função forçada. Quando desativado, esses pedidos falham por não serem suportados."
+		"convertDecisionToResponsesHelp": "Responde a pedidos de decisão em modelos sem endpoint nativo de decisões, invocando o modelo através da API Responses com uma ferramenta de função forçada. Quando desativado, esses pedidos falham por não serem suportados.",
+		"learnUnsupportedParams": "Aprender parâmetros não suportados",
+		"learnUnsupportedParamsHelp": "Quando um upstream rejeita um campo que o catálogo do modelo diz suportar, o mesmo provedor/modelo é repetido uma vez sem ele e ele deixa de ser enviado em pedidos posteriores. Corrige provedores revendedores cujos upstreams estão atrás das capacidades do catálogo."
 	},
 	"featureFlags": {
 		"title": "Sinalizadores de funcionalidades",

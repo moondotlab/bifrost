@@ -79,6 +79,10 @@ func dropUnsupportedParams(ctx *schemas.BifrostContext, req *schemas.BifrostRequ
 			params.PromptCacheKey = nil
 			dropped = append(dropped, "prompt_cache_key")
 		}
+		if params.PromptCacheOptions != nil && !isSupported["prompt_cache_options"] {
+			params.PromptCacheOptions = nil
+			dropped = append(dropped, "prompt_cache_options")
+		}
 		if params.PromptCacheRetention != nil && !isSupported["prompt_cache_retention"] {
 			params.PromptCacheRetention = nil
 			dropped = append(dropped, "prompt_cache_retention")
@@ -185,6 +189,10 @@ func dropUnsupportedParams(ctx *schemas.BifrostContext, req *schemas.BifrostRequ
 		if params.PromptCacheKey != nil && !isSupported["prompt_cache_key"] {
 			params.PromptCacheKey = nil
 			dropped = append(dropped, "prompt_cache_key")
+		}
+		if params.PromptCacheOptions != nil && !isSupported["prompt_cache_options"] {
+			params.PromptCacheOptions = nil
+			dropped = append(dropped, "prompt_cache_options")
 		}
 		if params.Reasoning != nil {
 			if !isSupported["reasoning"] {

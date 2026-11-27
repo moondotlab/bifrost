@@ -138,6 +138,16 @@ We recommend keeping this setting off and sending decisions to a model that serv
 - Per request, the header `x-bf-compat: ["convert_decision_to_responses"]` turns it on for that request only.
 - In the Go SDK, it is on when the compat plugin is registered with `compat.Config{ConvertDecisionToResponses: true}`.
 
+## 5. Learned Unsupported Parameters
+
+The model catalog describes what a model *should* accept, but reseller and self-hosted providers serving OpenAI/Azure/Anthropic model names routinely lag those claims — for example a gateway that does not implement OpenAI's `prompt_cache_breakpoint` rejects every request carrying cache markers with HTTP 400. With `learn_unsupported_params` on (the default), Bifrost learns from the rejection itself:
+
+1. When an upstream error names a request field it does not support (`"<field> is not supported"`, `Unrecognized request argument`, an error `param`, and similar phrasings), the (provider, model) pair records that field — for `prompt_cache_breakpoint`/`cache_control` the record means stripping all prompt-cache markers from messages, content blocks, tools and tool outputs.
+2. The same provider/model is then retried **within the same request**, before any fallback is tried: each retry's pre-hooks send the request without the rejected field, so an upstream that rejects several fields is whittled down one rejection at a time (capped at 3 retries) and the caller sees a normal response instead of an error.
+3. Every later request to that pair goes out without the field from the start — no failed round trip, no fallback churn.
+
+Only fields the compat layer can actually remove are learned (request parameters plus the cache markers); names like `model` or `messages` are ignored. Entries expire after 24 hours so an upstream that gains support recovers automatically, and a retry only fires when the rejection taught something new — an attempt that already ran fully stripped is never resent unchanged. Rejections are recorded under both the requested model name and the alias-resolved wire model, so the strip applies whether or not the request's model was rewritten by key aliases. Dropped learned params appear in `extra_fields.dropped_compat_plugin_params` like catalog-driven drops.
+
 ## Enabling LiteLLM Compatibility
 
 <Tabs group="litellm-compat">
@@ -172,7 +182,8 @@ We recommend keeping this setting off and sending decisions to a model that serv
       "should_convert_params": true,
       "azure_deepseek": true,
       "force_reasoning_only_models_to_responses": true,
-      "convert_decision_to_responses": false
+      "convert_decision_to_responses": false,
+      "learn_unsupported_params": true
     }
   }
 }

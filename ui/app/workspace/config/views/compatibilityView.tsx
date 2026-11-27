@@ -34,7 +34,8 @@ export default function CompatibilityView() {
 			(localCompatConfig.azure_deepseek ?? true) !== (baseline.azure_deepseek ?? true) ||
 			(localCompatConfig.force_reasoning_only_models_to_responses ?? true) !==
 				(baseline.force_reasoning_only_models_to_responses ?? true) ||
-			(localCompatConfig.convert_decision_to_responses ?? false) !== (baseline.convert_decision_to_responses ?? false)
+			(localCompatConfig.convert_decision_to_responses ?? false) !== (baseline.convert_decision_to_responses ?? false) ||
+			(localCompatConfig.learn_unsupported_params ?? true) !== (baseline.learn_unsupported_params ?? true)
 		);
 	}, [config, localCompatConfig]);
 
@@ -193,6 +194,23 @@ export default function CompatibilityView() {
 						size="md"
 						checked={localCompatConfig.convert_decision_to_responses ?? false}
 						onCheckedChange={(checked) => handleCompatChange("convert_decision_to_responses", checked)}
+						disabled={!hasSettingsUpdateAccess}
+					/>
+				</div>
+
+				<div className="flex items-center justify-between space-x-2">
+					<div className="space-y-0.5">
+						<label htmlFor="compat-learn-unsupported-params" className="text-sm font-medium">
+							{t("compatibility.learnUnsupportedParams")}
+						</label>
+						<p className="text-muted-foreground text-sm">{t("compatibility.learnUnsupportedParamsHelp")}</p>
+					</div>
+					<Switch
+						id="compat-learn-unsupported-params"
+						data-testid="compat-learn-unsupported-params"
+						size="md"
+						checked={localCompatConfig.learn_unsupported_params ?? true}
+						onCheckedChange={(checked) => handleCompatChange("learn_unsupported_params", checked)}
 						disabled={!hasSettingsUpdateAccess}
 					/>
 				</div>

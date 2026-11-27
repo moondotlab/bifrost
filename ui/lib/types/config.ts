@@ -907,6 +907,7 @@ export interface CompatConfig {
 	azure_deepseek: boolean;
 	force_reasoning_only_models_to_responses: boolean;
 	convert_decision_to_responses: boolean;
+	learn_unsupported_params: boolean;
 }
 
 // Per-execution code mode limits; an omitted or 0 field uses the server default.

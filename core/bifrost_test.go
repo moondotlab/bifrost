@@ -11273,3 +11273,64 @@ func TestResolveRawAdvisorToolAliases_NoMatchDoesNotAllocatePerTool(t *testing.T
 		t.Fatalf("no-match allocations grew with the tools array: %.0f allocs for 1 tool, %.0f for 200", one, many)
 	}
 }
+
+func TestLearnParamRejection(t *testing.T) {
+	provider := schemas.ModelProvider("learned-orch")
+	model := "gpt-6.2-sol"
+
+	ctx := schemas.NewBifrostContext(context.Background(), schemas.NoDeadline)
+	mkErr := func() *schemas.BifrostError {
+		err := &schemas.BifrostError{Error: &schemas.ErrorField{Message: "prompt_cache_breakpoint is not supported on this model"}}
+		// The attempt saw the request's model field; the wire carried the
+		// alias-resolved name. Both must learn so the strip applies to the
+		// same-request retry (req.SetModel mutated it to the wire name) and to
+		// later requests that still carry the requested name.
+		err.ExtraFields.RoutingInfo = schemas.RoutingInfo{Provider: provider, Model: model}
+		err.ExtraFields.ResolvedModelUsed = "wire-model"
+		return err
+	}
+
+	// Without the compat plugin's advertisement a retry would resend the
+	// identical request, so nothing is learned.
+	if learnParamRejection(ctx, mkErr(), provider, model) {
+		t.Fatal("expected rejection to be ignored while learned-param stripping is off")
+	}
+	ctx.SetValue(schemas.BifrostContextKeyCompatLearnUnsupportedParams, true)
+
+	// First rejection teaches the pair: the learned set changed, so the
+	// orchestrator retries the same provider/model once.
+	if !learnParamRejection(ctx, mkErr(), provider, model) {
+		t.Fatal("expected first param rejection to report a learned change")
+	}
+	// The strip must be visible under both the requested and the resolved
+	// (wire) model name.
+	for _, m := range []string{model, "wire-model"} {
+		if set := schemas.LearnedUnsupportedFor(provider, m); !set.StripCacheMarkers {
+			t.Fatalf("expected learned cache-marker strip under model %q", m)
+		}
+	}
+	// Same rejection again: nothing new learned, a retry would resend the
+	// identical (already stripped) request.
+	if learnParamRejection(ctx, mkErr(), provider, model) {
+		t.Fatal("expected repeat rejection to report no change")
+	}
+	// Non-param errors never teach.
+	other := &schemas.BifrostError{Error: &schemas.ErrorField{Message: "rate limit exceeded"}}
+	if learnParamRejection(ctx, other, provider, model) {
+		t.Fatal("expected non-param error to report no change")
+	}
+	if learnParamRejection(ctx, nil, provider, model) {
+		t.Fatal("expected nil error to report no change")
+	}
+	// A rejection attributed to a different pair learns under its own key —
+	// each (provider, model) is independent.
+	otherErr := mkErr()
+	otherErr.ExtraFields.RoutingInfo.Model = "other-model"
+	if !learnParamRejection(ctx, otherErr, provider, "other-model") {
+		t.Fatal("expected rejection for another model to learn under its own key")
+	}
+	// ...and it did not disturb the first pair's learned set.
+	if learnParamRejection(ctx, mkErr(), provider, model) {
+		t.Fatal("expected repeat rejection on the first pair to still report no change")
+	}
+}
