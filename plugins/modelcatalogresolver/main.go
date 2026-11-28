@@ -10,9 +10,11 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/maximhq/bifrost/core/schemas"
 	"github.com/maximhq/bifrost/framework/modelcatalog"
+	"github.com/maximhq/bifrost/framework/providerhealth"
 )
 
 const PluginName = "model-catalog-resolver"
@@ -299,6 +301,11 @@ func resolveFromCatalog(ctx *schemas.BifrostContext, catalog *modelcatalog.Model
 		}
 	}
 
+	providers = filterDegradedProviders(ctx, providers, model)
+	if len(providers) == 0 {
+		return "", nil
+	}
+
 	selected := providers[0]
 	if integrationType != "" {
 		if integrationDefault, mapped := integrationTypeToDefaultProvider[integrationType]; mapped && integrationDefault != "" {
@@ -312,6 +319,36 @@ func resolveFromCatalog(ctx *schemas.BifrostContext, catalog *modelcatalog.Model
 		}
 	}
 	return selected, providers
+}
+
+// filterDegradedProviders drops candidates the providerhealth tracker has temporarily
+// degraded for consecutive credential/quota failures, unless every candidate is degraded:
+// then the model has no healthy route at all, so degraded providers stay as last resort
+// and their attempts double as recovery probes.
+func filterDegradedProviders(ctx *schemas.BifrostContext, providers []schemas.ModelProvider, model string) []schemas.ModelProvider {
+	healthy := make([]schemas.ModelProvider, 0, len(providers))
+	degradedDetails := make([]string, 0)
+	for _, prov := range providers {
+		if degraded, retryIn, failures := providerhealth.Default.IsDegraded(prov); degraded {
+			degradedDetails = append(degradedDetails, fmt.Sprintf("%s (%d consecutive credential/quota failures, rejoins in %s)", prov, failures, retryIn.Round(time.Second)))
+		} else {
+			healthy = append(healthy, prov)
+		}
+	}
+	if len(degradedDetails) == 0 || len(healthy) == 0 {
+		return providers
+	}
+	if ctx != nil {
+		healthyStrs := make([]string, len(healthy))
+		for i, prov := range healthy {
+			healthyStrs[i] = string(prov)
+		}
+		ctx.AppendRoutingEngineLog(schemas.RoutingEngineModelCatalog, schemas.LogLevelInfo, fmt.Sprintf(
+			"Catalog candidate provider(s) temporarily degraded by health tracker: [%s]; excluded for model %s while healthy candidates remain: [%s]",
+			strings.Join(degradedDetails, ", "), model, strings.Join(healthyStrs, ", "),
+		))
+	}
+	return healthy
 }
 
 // PreLLMHook implements schemas.LLMPlugin (no-op).

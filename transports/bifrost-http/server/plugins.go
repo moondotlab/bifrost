@@ -7,6 +7,7 @@ import (
 	"slices"
 
 	"github.com/maximhq/bifrost/core/schemas"
+	"github.com/maximhq/bifrost/framework/providerhealth"
 	"github.com/maximhq/bifrost/plugins/compat"
 	"github.com/maximhq/bifrost/plugins/governance"
 	"github.com/maximhq/bifrost/plugins/logging"
@@ -203,6 +204,9 @@ func loadBuiltinPlugin(ctx context.Context, name string, pluginConfig any, bifro
 	case modelcatalogresolver.PluginName:
 		return modelcatalogresolver.Init(bifrostConfig.ModelCatalog, logger)
 
+	case providerhealth.PluginName:
+		return providerhealth.Init(ctx, pluginConfig, logger)
+
 	default:
 		return nil, fmt.Errorf("unknown built-in plugin: %s", name)
 	}
@@ -357,6 +361,12 @@ func (s *BifrostHTTPServer) loadBuiltinPlugins(ctx context.Context) error {
 		s.markPluginDisabled(maxim.PluginName)
 	}
 	s.Config.SetPluginOrderInfo(maxim.PluginName, builtinPlacement, schemas.Ptr(9))
+
+	// 11. ProviderHealth (fork-private): always registered. It only observes per-attempt
+	// outcomes in PostLLMHook and feeds the shared tracker the routing plugins read, so its
+	// position in the chain does not affect routing order.
+	s.registerPluginWithStatus(ctx, providerhealth.PluginName, nil, nil, false)
+	s.Config.SetPluginOrderInfo(providerhealth.PluginName, builtinPlacement, schemas.Ptr(11))
 
 	// 10. ModelCatalogResolver (last routing layer — fills req.Provider from catalog only when
 	// no earlier routing plugin (governance routing rules, governance VK LB, enterprise LB)

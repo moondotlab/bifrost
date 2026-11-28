@@ -25,6 +25,7 @@ import (
 	"github.com/maximhq/bifrost/framework/jobaccounting"
 	"github.com/maximhq/bifrost/framework/mcpcatalog"
 	"github.com/maximhq/bifrost/framework/modelcatalog"
+	"github.com/maximhq/bifrost/framework/providerhealth"
 )
 
 // PluginName is the name of the governance plugin
@@ -551,6 +552,28 @@ func (p *GovernancePlugin) LoadBalanceProvider(ctx *schemas.BifrostContext, req 
 			continue
 		}
 		eligible = append(eligible, candidate)
+	}
+
+	// Fork-private provider health integration (plugins/providerhealth): candidates whose
+	// accounts are temporarily degraded for consecutive credential/quota failures leave the
+	// pool while at least one healthy candidate remains. When every candidate is degraded
+	// they all stay — the model has no healthy route, so degraded providers serve as last
+	// resort and their attempts double as recovery probes.
+	if len(eligible) > 1 {
+		healthyCandidates := make([]schemas.ProviderCandidate, 0, len(eligible))
+		degradedDetails := make([]string, 0)
+		for _, candidate := range eligible {
+			if degraded, retryIn, failures := providerhealth.Default.IsDegraded(schemas.ModelProvider(candidate.Provider)); degraded {
+				degradedDetails = append(degradedDetails, fmt.Sprintf("%s (%d consecutive credential/quota failures, rejoins in %s)", candidate.Provider, failures, retryIn.Round(time.Second)))
+			} else {
+				healthyCandidates = append(healthyCandidates, candidate)
+			}
+		}
+		if len(degradedDetails) > 0 && len(healthyCandidates) > 0 {
+			ctx.AppendRoutingEngineLog(schemas.RoutingEngineGovernance, schemas.LogLevelInfo,
+				fmt.Sprintf("Provider(s) temporarily degraded by health tracker: [%s]; excluded from load balancing while healthy candidates remain", strings.Join(degradedDetails, ", ")))
+			eligible = healthyCandidates
+		}
 	}
 
 	var eligibleProviders []string
