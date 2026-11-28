@@ -57,18 +57,19 @@ type Store struct {
 
 	// Canonical pricing state, protected by mu. Read paths take RLock and
 	// return defensive copies of any slice/map they expose.
-	mu                     sync.RWMutex
-	pricingData            map[string]configstoreTables.TableModelPricing // model|provider|mode → row
-	modelModes             map[modelMetadataKey][]string                  // normalized model/provider → preferred-first modes
-	familyModes            map[modelMetadataKey][]string                  // normalized base model/provider → preferred-first modes
-	overrideMetadataKeys   map[string]modelMetadataKey                    // synthetic parameter row → metadata index key
-	modelConsensus         map[string]parameterModelMetadata              // normalized exact model name → shared capabilities
-	parameterMetadata      map[modelMetadataKey]parameterModelMetadata    // normalized model/provider → parameter-sheet capabilities
-	baseModelIndex         map[string]string                              // model → canonical base name
-	supportedResponseTypes map[string][]string                            // model → [chat_completion, responses, …]
-	supportedParams        map[string][]string                            // model → [temperature, top_p, …]
-	modelParameterKeys     []string                                       // usable parameter rows, including empty allowlists
-	modelParamsSyncMu      sync.Mutex                                     // serialize DB snapshot, write, and publication
+	mu                      sync.RWMutex
+	pricingData             map[string]configstoreTables.TableModelPricing // model|provider|mode → row
+	modelModes              map[modelMetadataKey][]string                  // normalized model/provider → preferred-first modes
+	familyModes             map[modelMetadataKey][]string                  // normalized base model/provider → preferred-first modes
+	overrideMetadataKeys    map[string]modelMetadataKey                    // synthetic parameter row → metadata index key
+	modelConsensus          map[string]parameterModelMetadata              // normalized exact model name → shared capabilities
+	parameterMetadata       map[modelMetadataKey]parameterModelMetadata    // normalized model/provider → parameter-sheet capabilities
+	pricingProvidersByModel map[string][]string                            // normalized model name → sorted providers holding a pricing row
+	baseModelIndex          map[string]string                              // model → canonical base name
+	supportedResponseTypes  map[string][]string                            // model → [chat_completion, responses, …]
+	supportedParams         map[string][]string                            // model → [temperature, top_p, …]
+	modelParameterKeys      []string                                       // usable parameter rows, including empty allowlists
+	modelParamsSyncMu       sync.Mutex                                     // serialize DB snapshot, write, and publication
 
 	// onModelParametersApplied fires after a model-parameters reload lands, so
 	// caches built from the previous sheet can be dropped.

@@ -166,6 +166,7 @@ func (s *Store) rebuildModelModesUnsafe() {
 			index[key] = sortCapabilityModes(modes)
 		}
 	}
+	s.rebuildPricingProvidersByModelUnsafe()
 	s.rebuildModelConsensusUnsafe()
 }
 

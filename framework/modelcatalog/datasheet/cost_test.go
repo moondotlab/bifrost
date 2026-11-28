@@ -488,6 +488,10 @@ func testStoreWithPricing(entries map[string]configstoreTables.TableModelPricing
 	for k, v := range entries {
 		s.pricingData[k] = v
 	}
+	// Production rows always land through setPricingRowsUnsafe, so the derived
+	// indexes (mode metadata, cross-provider pricing inheritance) must reflect
+	// the seeded rows here too.
+	s.rebuildModelModesUnsafe()
 	return s
 }
 

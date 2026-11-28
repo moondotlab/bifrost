@@ -2925,6 +2925,13 @@ func (s *Store) getBasePricing(model, provider string, requestType schemas.Reque
 		}
 	}
 
+	// Every same-provider fallback missed. Rather than leaving the request
+	// unpriced — custom providers rarely carry datasheet rows of their own —
+	// inherit another provider's row for the same model name.
+	if inherited, ok := s.inheritProviderPricingUnsafe(model, provider, mode, fallbackMode, hasFallbackMode); ok {
+		return inherited, true
+	}
+
 	return nil, false
 }
 
